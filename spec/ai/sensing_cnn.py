@@ -49,6 +49,7 @@ class InferenceEngine:
         self.model = SpectrumCNN().to(self.device)
         self.model.eval()
         self.class_names = ["Idle", "5G", "IoT", "Radar"]
+        self.confidence_threshold = 0.5 # Default AI sensitivity
         
         if model_path:
             try:
@@ -73,5 +74,6 @@ class InferenceEngine:
         confidence, predicted = torch.max(probabilities, 1)
         idx = predicted.item()
         
-        is_busy = bool(idx != 0)
+        # Sense with dynamic sensitivity threshold
+        is_busy = bool(idx != 0 and confidence.item() > self.confidence_threshold)
         return is_busy, self.class_names[idx], confidence.item()

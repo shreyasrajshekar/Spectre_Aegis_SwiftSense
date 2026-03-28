@@ -32,7 +32,13 @@ global_telemetry = {
     "reward": 0.0,
     "q_values": [],
     "waterfall_slice": [],
-    "sdr_linked": False
+    "sdr_linked": False,
+    "reasoning_msg": "Initializing Aegis...",
+    "event_trigger": None,
+    "conf_threshold": 0.5,
+    "pwr_threshold": -60.0,
+    "manual_mode": False,
+    "is_paused": False
 }
 connected_clients = []
 
@@ -60,6 +66,29 @@ async def websocket_endpoint(websocket: WebSocket):
                 is_max_throughput = cmd_data.get('val', False)
                 if is_max_throughput:
                     aegis.rl_agent.epsilon = 0.5 
+            elif cmd_data.get('cmd') == 'set_channel':
+                ch_idx = cmd_data.get('idx', 0)
+                aegis.manual_override = True
+                aegis.current_channel_idx = ch_idx
+                aegis.sdr.set_frequency(BANDS[ch_idx])
+                logging.info(f"Manual Override: Forced channel {ch_idx}")
+            elif cmd_data.get('cmd') == 'update_params':
+                conf = cmd_data.get('conf')
+                pwr = cmd_data.get('pwr')
+                if conf is not None:
+                    aegis.cnn.confidence_threshold = conf
+                    global_telemetry["conf_threshold"] = conf
+                if pwr is not None:
+                    aegis.power_threshold = pwr
+                    global_telemetry["pwr_threshold"] = pwr
+            elif cmd_data.get('cmd') == 'toggle_manual_mode':
+                aegis.manual_override = cmd_data.get('val', False)
+                global_telemetry["manual_mode"] = aegis.manual_override
+                logging.info(f"Control Mode Switched: {'MANUAL' if aegis.manual_override else 'AUTO'}")
+            elif cmd_data.get('cmd') == 'toggle_pause':
+                aegis.is_paused = cmd_data.get('val', False)
+                global_telemetry["is_paused"] = aegis.is_paused
+                logging.info(f"Scan Loop {'PAUSED' if aegis.is_paused else 'RESUMED'}")
     except WebSocketDisconnect:
         if websocket in connected_clients:
             connected_clients.remove(websocket)
@@ -87,7 +116,7 @@ async def broadcast_telemetry():
             for dc in dead_clients:
                 if dc in connected_clients:
                     connected_clients.remove(dc)
-        await asyncio.sleep(0.02) # 50 FPS broadcast
+        await asyncio.sleep(0.1) # 10 FPS broadcast is plenty for HUD
 
 class SpectreAegisController:
     def __init__(self, use_digital_twin=False):
@@ -98,6 +127,9 @@ class SpectreAegisController:
         self.rl_agent = RLController(action_dim=len(BANDS))
         self.current_channel_idx = 0
         self.run_loop = True
+        self.manual_override = False
+        self.power_threshold = -60.0
+        self.is_paused = False
         
     def execute_cycle(self):
         t_start = time.perf_counter()
@@ -106,19 +138,31 @@ class SpectreAegisController:
         iq_data = self.sdr.capture_iq()
         
         # Format Waterfall Slice for UI (downsample for bandwidth)
-        waterfall_slice = 10 * np.log10(np.abs(np.fft.fftshift(np.fft.fft(iq_data[:1024]))) + 1e-12)
-        global_telemetry["waterfall_slice"] = waterfall_slice.tolist()
+        psd_data = np.abs(np.fft.fftshift(np.fft.fft(iq_data[:1024]))) + 1e-12
+        waterfall_slice = 10 * np.log10(psd_data)
+        if hasattr(waterfall_slice, "tolist"):
+            global_telemetry["waterfall_slice"] = waterfall_slice.tolist()
+        else:
+            global_telemetry["waterfall_slice"] = [float(x) for x in waterfall_slice]
         
         # DSP
         spectrogram = self.dsp.process_iq(iq_data)
         
         # AI CNN (Multiclass)
-        is_busy, class_name, confidence = self.cnn.predict(spectrogram)
+        is_busy_ai, class_name, confidence = self.cnn.predict(spectrogram)
+        
+        # Power Squelch Check
+        avg_pwr = 10 * np.log10(np.mean(np.abs(iq_data)**2) + 1e-12)
+        is_busy_pwr = avg_pwr > self.power_threshold
+        
+        is_busy = bool(is_busy_ai or is_busy_pwr)
         
         global_telemetry["is_busy"] = is_busy
-        global_telemetry["class_name"] = class_name
-        global_telemetry["confidence"] = round(confidence, 3)
-        
+        global_telemetry["manual_mode"] = self.manual_override
+        global_telemetry["class_name"] = str(class_name) if is_busy_ai else "Noise"
+        global_telemetry["confidence"] = round(float(confidence), 3)
+        global_telemetry["event_trigger"] = None
+
         # History
         self.rl_agent.push_state(is_busy)
         
@@ -129,12 +173,22 @@ class SpectreAegisController:
             global_telemetry["q_values"] = q_vals[0].cpu().numpy().tolist()
 
         if is_busy:
-            action = self.rl_agent.select_action()
-            new_freq = BANDS[action]
-            self.sdr.set_frequency(new_freq)
-            self.current_channel_idx = action
-            reward = self.rl_agent.compute_reward(is_busy=True, action_channel=action)
+            global_telemetry["event_trigger"] = "collision"
+            if not self.manual_override:
+                action = self.rl_agent.select_action()
+                new_freq = BANDS[action]
+                self.sdr.set_frequency(new_freq)
+                self.current_channel_idx = action
+                global_telemetry["reasoning_msg"] = f"PU '{class_name}' @ CH{self.current_channel_idx} -> Hopping to CH{action}"
+            else:
+                global_telemetry["reasoning_msg"] = f"Manual Override active. PU detected but hold frequency."
+            reward = self.rl_agent.compute_reward(is_busy=True, action_channel=self.current_channel_idx)
         else:
+            if not self.manual_override:
+                global_telemetry["reasoning_msg"] = f"Sensing... CH{self.current_channel_idx} IDLE"
+            else:
+                global_telemetry["reasoning_msg"] = f"Manual Lock on CH{self.current_channel_idx}"
+            
             tx_data = np.zeros(1024, dtype=complex)
             self.sdr.transmit(tx_data)
             reward = self.rl_agent.compute_reward(is_busy=False, action_channel=self.current_channel_idx)
@@ -142,15 +196,16 @@ class SpectreAegisController:
         t_end = time.perf_counter()
         lat = (t_end - t_start) * 1000
         
-        global_telemetry["latency_ms"] = round(lat, 2)
-        global_telemetry["channel_idx"] = self.current_channel_idx
-        global_telemetry["reward"] = reward
+        global_telemetry["reward"] = round(float(reward), 3)
+        global_telemetry["latency_ms"] = float(round(lat, 2))
+        global_telemetry["channel_idx"] = int(self.current_channel_idx)
         return lat, reward
 
     def controller_thread(self):
         while self.run_loop:
-            self.execute_cycle()
-            time.sleep(0.01)
+            if not self.is_paused:
+                self.execute_cycle()
+            time.sleep(0.05) # 20 Hz loop is sufficient and saves CPU
 
 # Ensure static folder exists
 os.makedirs("static", exist_ok=True)

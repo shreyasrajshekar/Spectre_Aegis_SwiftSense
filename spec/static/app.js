@@ -1,46 +1,119 @@
-const ws = new WebSocket(`ws://${window.location.host}/ws`);
+// --- Internal Config & State ---
+const freqLabels = Array.from({length: 10}, (_, i) => `${(2.4 + (i * 0.01)).toFixed(2)}G`);
+let currentViewMode = 'spectrum'; 
+let waterfallHistory = [];
+const HISTORY_LEN = 80;
+let freqChart = null;
+let lossChart = null;
+let lastChartUpdate = 0;
 
-// DOM Elements
+// --- DOM Elements ---
 const latVal = document.getElementById('latency-val');
 const chVal = document.getElementById('channel-val');
-const rVal = document.getElementById('reward-val'); // Used for D3QN Mock Loss display
+const rVal = document.getElementById('reward-val'); 
 const hoVal = document.getElementById('handover-val');
 const pwrVal = document.getElementById('power-val');
 const stepVal = document.getElementById('steps-val');
+const rLog = document.getElementById('reasoning-log');
+const confSlider = document.getElementById('conf-slider');
+const pwrSlider = document.getElementById('pwr-slider');
+const confDisp = document.getElementById('conf-val-display');
+const pwrDisp = document.getElementById('pwr-val-display');
+const viewToggleBtn = document.getElementById('view-toggle-btn');
+const viewModeIcon = document.getElementById('view-mode-icon');
+const canvas = document.getElementById('spectrum-canvas');
+const ctx = canvas?.getContext('2d');
+const alertCollision = document.getElementById('alert-collision');
+const alertHandover = document.getElementById('alert-handover');
 
-// System state tracking
+// --- Initialization ---
 let learningSteps = parseInt(stepVal?.textContent) || 0;
 
-// Dynamic Frequency Tabs Setup
-const freqTabsContainer = document.querySelector('.frequency-tabs');
-if (freqTabsContainer) {
-    freqTabsContainer.innerHTML = '';
-    const displayBands = ['2.40G', '2.42G', '2.44G', '2.46G', '2.48G']; // Map 10 channels to 5 UI tabs
-    displayBands.forEach((band, idx) => {
+function setupTabs() {
+    const container = document.querySelector('.frequency-tabs');
+    if (!container) return;
+    container.innerHTML = '';
+    
+    // Display first 5 bands for the HUD tabs
+    freqLabels.slice(0, 5).forEach((label, idx) => {
         const btn = document.createElement('button');
-        btn.className = idx === 0 ? 'tab active' : 'tab';
-        btn.textContent = band;
-        freqTabsContainer.appendChild(btn);
+        btn.className = 'tab';
+        btn.textContent = label;
+        btn.onclick = () => {
+            if(window.ws) window.ws.send(JSON.stringify({ cmd: 'set_channel', idx: idx * 2 }));
+            updateTabUI(idx);
+        };
+        container.appendChild(btn);
     });
 }
 
-function updateTabs(chIdx) {
-    const visualIdx = Math.floor((chIdx || 0) / 2); // 0-9 index divided by 2 into 0-4 tabs
-    const tabs = document.querySelectorAll('.frequency-tabs .tab');
-    if(tabs.length > visualIdx) {
-        tabs.forEach(t => t.classList.remove('active'));
-        tabs[visualIdx].classList.add('active');
-        
-        // Update Frequency metric text
-        if(chVal) chVal.textContent = `${tabs[visualIdx].textContent}Hz`;
+function initFreqMatrix() {
+    const freqMatrixCtx = document.getElementById('freq-matrix-canvas')?.getContext('2d');
+    if(freqMatrixCtx) {
+        freqChart = new Chart(freqMatrixCtx, {
+            type: 'bar',
+            data: { labels: freqLabels, datasets: [{ data: new Array(10).fill(0), borderRadius: 4, backgroundColor: 'rgba(56, 189, 248, 0.3)' }] },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: false },
+                scales: {
+                    x: { ticks: { color: '#94a3b8', font: {size: 9} } },
+                    y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { display: false } }
+                }
+            }
+        });
     }
 }
 
-// Waterfall Canvas
-const canvas = document.getElementById('waterfall-canvas');
-const ctx = canvas.getContext('2d');
-let waterfallHistory = [];
-const HISTORY_LEN = 80;
+function initLossChart() {
+    const lossCtx = document.getElementById('loss-canvas')?.getContext('2d');
+    if(lossCtx) {
+        lossChart = new Chart(lossCtx, {
+            type: 'line',
+            data: {
+                labels: Array.from({length: 20}, (_, i) => i + 1),
+                datasets: [{
+                    label: 'Agent Reward',
+                    data: new Array(20).fill(0),
+                    borderColor: '#ec4899',
+                    borderWidth: 2,
+                    pointRadius: 2,
+                    pointBackgroundColor: '#ec4899',
+                    tension: 0.3,
+                    fill: false
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: { display: false },
+                    y: { 
+                        display: true, 
+                        position: 'right',
+                        min: -100, 
+                        max: 100,
+                        grid: { color: 'rgba(255,255,255,0.03)' },
+                        ticks: { color: 'rgba(255,255,255,0.2)', font: { size: 8 } }
+                    }
+                },
+                plugins: { legend: { display: false } },
+                layout: { padding: { left: 5, right: 30, top: 15, bottom: 5 } }
+            }
+        });
+        logToTerminal("AI Engine Graph Initialized.", "success");
+    } else {
+        logToTerminal("CRITICAL: AI Graph Canvas NOT found!", "warn");
+    }
+}
+
+function updateTabUI(visualIdx) {
+    const tabs = document.querySelectorAll('.frequency-tabs .tab');
+    tabs.forEach((t, i) => {
+        if(i === visualIdx) t.classList.add('active');
+        else t.classList.remove('active');
+    });
+}
 
 function resizeCanvas() {
     if(canvas && canvas.parentElement) {
@@ -48,18 +121,87 @@ function resizeCanvas() {
         canvas.height = canvas.parentElement.clientHeight;
     }
 }
+window.addEventListener('load', () => {
+    resizeCanvas();
+    setupTabs();
+    initFreqMatrix();
+    initLossChart();
+});
 window.addEventListener('resize', resizeCanvas);
-resizeCanvas();
+
+// --- Drawing Functions ---
+function drawGrid(w, h) {
+    if(!ctx) return;
+    ctx.strokeStyle = 'rgba(34, 211, 238, 0.05)';
+    ctx.lineWidth = 0.5;
+    
+    // Vertical Grid
+    for(let x=0; x<=w; x += w/10) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, h);
+        ctx.stroke();
+    }
+    // Horizontal Grid
+    for(let y=0; y<=h; y += h/6) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+    }
+}
+
+function drawSpectrum(slice) {
+    if(!ctx || !slice || slice.length === 0) return;
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    
+    drawGrid(w, h);
+    
+    const numBins = slice.length;
+    const stepX = w / (numBins - 1);
+    
+    // Area Gradient
+    const gradient = ctx.createLinearGradient(0, 0, 0, h);
+    gradient.addColorStop(0, 'rgba(34, 211, 238, 0.15)');
+    gradient.addColorStop(1, 'rgba(34, 211, 238, 0.0)');
+    
+    ctx.beginPath();
+    ctx.moveTo(0, h);
+    for(let i=0; i<numBins; i++) {
+        const normalized = Math.max(0, Math.min(1, (slice[i] + 100) / 120));
+        ctx.lineTo(i * stepX, h - (normalized * h));
+    }
+    ctx.lineTo(w, h);
+    ctx.fillStyle = gradient;
+    ctx.fill();
+    
+    // Glowing Line
+    ctx.save();
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = '#22d3ee';
+    ctx.beginPath();
+    for(let i=0; i<numBins; i++) {
+        const normalized = Math.max(0, Math.min(1, (slice[i] + 100) / 120));
+        const x = i * stepX;
+        const y = h - (normalized * h);
+        if(i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    }
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#22d3ee';
+    ctx.stroke();
+    ctx.restore();
+}
 
 function drawWaterfall(slice) {
     if(!ctx || !slice || slice.length === 0) return;
-    
     waterfallHistory.unshift(slice);
     if(waterfallHistory.length > HISTORY_LEN) waterfallHistory.pop();
     
     const w = canvas.width;
     const h = canvas.height;
-    
     ctx.clearRect(0, 0, w, h);
     
     const numBins = slice.length;
@@ -69,136 +211,158 @@ function drawWaterfall(slice) {
     for(let i=0; i<waterfallHistory.length; i++) {
         const rowData = waterfallHistory[i];
         const y = i * cellH;
-        
         for(let j=0; j<numBins; j++) {
             const val = rowData[j];
-            // Render beautiful sleek neon heatmaps 
-            const normalized = Math.max(0, Math.min(1, (val + 80) / 100)); 
-            if(normalized < 0.1) continue; // Skip rendering dark for performance and aesthetic
+            const normalized = Math.max(0, Math.min(1, (val + 90) / 100)); 
+            if(normalized < 0.1) continue;
             
-            // HSL map to match the cyberpunk/cyan theme
-            const hue = 190 + (normalized * 90); 
-            ctx.fillStyle = `hsla(${hue}, 90%, 60%, ${normalized * 0.9})`;
+            // High-contrast Plasma/Inferno palette
+            const hue = 280 - (normalized * 280); // Purple -> Blue -> Cyan -> Green -> Yellow -> Red
+            ctx.fillStyle = `hsla(${hue}, 80%, ${30 + normalized * 40}%, ${normalized * 0.8})`;
             ctx.fillRect(j * cellW, y, Math.ceil(cellW)+1, Math.ceil(cellH)+1);
         }
     }
 }
 
-function updateMockEvoChart() {
-    // Generate pseudo-data for the pink "D3QN Loss" chart to make it jitter realistically
-    if(window.lossChart && window.lossChart.data.datasets.length > 0) {
-        let arr = window.lossChart.data.datasets[0].data;
-        arr.shift();
-        let targetLoss = Math.max(10, 50 - (learningSteps / 20)); // Base trend: loss dropping then oscillating
-        let newLoss = targetLoss + (Math.random() * 20 - 10);
-        arr.push(Math.max(0, newLoss));
-        window.lossChart.update();
-        if(rVal) rVal.textContent = newLoss.toFixed(3);
-    }
+function logToTerminal(msg, type='normal') {
+    if(!rLog) return;
+    const line = document.createElement('div');
+    line.className = `log-line ${type}`;
+    const timestamp = new Date().toLocaleTimeString('en-GB', { hour12: false, fractionDigits: 1 });
+    line.innerHTML = `<span style="color:var(--text-muted)">[${timestamp}]</span> ${msg}`;
+    rLog.appendChild(line);
+    rLog.scrollTop = rLog.scrollHeight;
+    if(rLog.childNodes.length > 100) rLog.removeChild(rLog.firstChild);
 }
+
+// --- WebSocket Connection ---
+const ws = new WebSocket(`ws://${window.location.host}/ws`);
+window.ws = ws;
 
 ws.onmessage = (event) => {
     const data = JSON.parse(event.data);
     
-    // Check SDR Link Status Overlay
     if (data.sdr_linked === false) {
         document.getElementById('freeze-overlay').style.display = 'flex';
-        const modeTag = document.querySelector('.mode-tag.linked');
-        if(modeTag) {
-            modeTag.textContent = 'SDR: ERROR';
-            modeTag.style.color = '#ef4444';
-        }
-        return; // Freeze updates
+        return;
     } else {
-        const overlay = document.getElementById('freeze-overlay');
-        if (overlay) overlay.style.display = 'none';
-        const modeTag = document.querySelector('.mode-tag.linked');
-        if(modeTag) {
-            modeTag.textContent = 'SDR: LINKED';
-            modeTag.style.color = '#14b8a6';
+        document.getElementById('freeze-overlay').style.display = 'none';
+    }
+    
+    if(latVal) latVal.textContent = `${data.latency_ms} ms`;
+    if(chVal) chVal.textContent = freqLabels[data.channel_idx] + "Hz";
+    if(rVal) rVal.textContent = data.reward.toFixed(3);
+    if(pwrVal && data.waterfall_slice.length > 0) {
+        const peak = Math.max(...data.waterfall_slice);
+        pwrVal.textContent = `${peak.toFixed(1)} dBm`;
+    }
+    
+    // Update AI Engine Graph (Loss/Reward Chart)
+    if(lossChart) {
+        const val = (data.reward !== undefined && !isNaN(data.reward)) ? data.reward : 0;
+        const chartData = lossChart.data.datasets[0].data;
+        chartData.push(val);
+        if(chartData.length > 20) chartData.shift();
+        
+        const now = Date.now();
+        if(now - lastChartUpdate > 100) { // Throttle to 10Hz
+            lossChart.update('none');
+            lastChartUpdate = now;
+        }
+    } else if (data.reward !== undefined) {
+        console.warn("Telemetry arriving but lossChart not ready.");
+    }
+    
+    updateTabUI(Math.floor(data.channel_idx / 2));
+
+    if (data.reasoning_msg) {
+        const type = data.is_busy ? 'warn' : 'success';
+        logToTerminal(data.reasoning_msg, type);
+    }
+
+    // Sync Mode Tag
+    const modeToggle = document.getElementById('mode-toggle');
+    if (modeToggle) {
+        if (data.manual_mode) {
+            modeToggle.textContent = 'MANUAL';
+            modeToggle.className = 'mode-tag manual';
+        } else {
+            modeToggle.textContent = 'AUTO';
+            modeToggle.className = 'mode-tag auto';
         }
     }
-    
-    // Base Telemetry bindings
-    if(latVal) {
-        latVal.textContent = `${data.latency_ms} ms`;
-        latVal.style.color = data.latency_ms > 30 ? '#fcd34d' : '#38bdf8';
-    }
-    
-    updateTabs(data.channel_idx);
 
-    // AI logic parsing
-    if (data.is_busy) {
-        // We had a forced handover step
+    // Sync Pause/Resume State
+    const pauseBtn = document.getElementById('pause-btn');
+    const haltOverlay = document.getElementById('halted-overlay');
+    if (pauseBtn) {
+        pauseBtn.querySelector('span').textContent = data.is_paused ? 'RESUME SCAN' : 'STOP SCAN';
+        if (data.is_paused) pauseBtn.classList.add('paused');
+        else pauseBtn.classList.remove('paused');
+    }
+    if (haltOverlay) {
+        haltOverlay.style.display = data.is_paused ? 'flex' : 'none';
+    }
+
+    if (data.event_trigger === 'collision') {
+        alertCollision?.play().catch(()=>{});
         learningSteps++;
         if(stepVal) stepVal.textContent = learningSteps;
         if(hoVal) hoVal.textContent = `${data.latency_ms} ms`;
-        updateMockEvoChart();
     } else {
-        // Channel IDLE
         if(hoVal) hoVal.textContent = `0.00ms`;
     }
     
-    // Draw UI PSD Slice & Set Power Stat
-    drawWaterfall(data.waterfall_slice);
-    if(data.waterfall_slice && data.waterfall_slice.length > 0) {
-        const maxPwr = Math.max(...data.waterfall_slice);
-        if(pwrVal) pwrVal.textContent = `${maxPwr.toFixed(1)} dBm`;
-    }
+    if (currentViewMode === 'spectrum') drawSpectrum(data.waterfall_slice);
+    else drawWaterfall(data.waterfall_slice);
     
-    // Update Frequency Matrix Chart
     if (data.q_values && data.q_values.length > 0 && freqChart) {
         freqChart.data.datasets[0].data = data.q_values;
-        const colors = new Array(10).fill('rgba(56, 189, 248, 0.4)');
-        colors[data.channel_idx] = 'rgba(20, 184, 166, 0.8)'; // Teal for active
-        if (data.is_busy) colors[data.channel_idx] = 'rgba(239, 68, 68, 0.8)'; // Red
+        const colors = new Array(10).fill('rgba(56, 189, 248, 0.3)');
+        colors[data.channel_idx] = data.is_busy ? 'rgba(239, 68, 68, 0.8)' : 'rgba(20, 184, 166, 0.8)';
         freqChart.data.datasets[0].backgroundColor = colors;
-        freqChart.update();
+        freqChart.update('none');
     }
 };
 
-// Hidden logic bindings to prevent old js from throwing warnings if imported later
-document.getElementById('twin-toggle')?.addEventListener('change', (e) => {
-    ws.send(JSON.stringify({ cmd: 'toggle_twin', val: e.target.checked }));
+// --- Event Listeners ---
+confSlider?.addEventListener('input', (e) => {
+    const val = parseFloat(e.target.value);
+    if(confDisp) confDisp.textContent = val.toFixed(2);
+    ws.send(JSON.stringify({ cmd: 'update_params', conf: val }));
 });
-document.getElementById('throughput-opt')?.addEventListener('change', (e) => {
-    ws.send(JSON.stringify({ cmd: 'toggle_optimizer', val: e.target.checked }));
-});
-document.getElementById('exit-btn')?.addEventListener('click', () => {
-    ws.send(JSON.stringify({ cmd: 'exit' }));
+pwrSlider?.addEventListener('input', (e) => {
+    const val = parseInt(e.target.value);
+    if(pwrDisp) pwrDisp.textContent = `${val} dB`;
+    ws.send(JSON.stringify({ cmd: 'update_params', pwr: val }));
 });
 
-// Frequency Matrix Chart Initialization
-const freqMatrixCtx = document.getElementById('freq-matrix-canvas')?.getContext('2d');
-const freqLabels = Array.from({length: 10}, (_, i) => `${2400 + (i * 10)} MHz`);
-const freqChart = freqMatrixCtx ? new Chart(freqMatrixCtx, {
-    type: 'bar',
-    data: {
-        labels: freqLabels,
-        datasets: [{
-            label: 'AI Model Q-Value (Channel Quality)',
-            data: new Array(10).fill(0),
-            backgroundColor: 'rgba(56, 189, 248, 0.4)',
-            borderColor: '#38bdf8',
-            borderWidth: 1,
-            borderRadius: 4
-        }]
-    },
-    options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { display: false }, tooltip: { enabled: false } },
-        scales: {
-            x: { grid: { display: false }, ticks: { color: '#9ba6b5', font: {family: 'JetBrains Mono', size: 10} } },
-            y: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#9ba6b5', font: {size: 10} } }
-        },
-        animation: { duration: 100 }
-    }
-}) : null;
+viewToggleBtn?.addEventListener('click', () => {
+    currentViewMode = currentViewMode === 'spectrum' ? 'waterfall' : 'spectrum';
+    if(viewModeIcon) viewModeIcon.textContent = currentViewMode === 'spectrum' ? '📊' : '🌊';
+    waterfallHistory = [];
+});
 
-// View More Button Toggle Event
 document.getElementById('view-more-btn')?.addEventListener('click', function() {
     this.classList.toggle('open');
-    const panel = document.getElementById('expanded-freq-panel');
-    if (panel) panel.classList.toggle('open');
+    document.getElementById('expanded-freq-panel')?.classList.toggle('open');
+});
+
+// Mode Toggle Listener
+document.getElementById('mode-toggle')?.addEventListener('click', function() {
+    const isManual = this.classList.contains('manual');
+    ws.send(JSON.stringify({ cmd: 'toggle_manual_mode', val: !isManual }));
+});
+
+// Pause/Resume Listener
+document.getElementById('pause-btn')?.addEventListener('click', function() {
+    const isPaused = this.classList.contains('paused');
+    ws.send(JSON.stringify({ cmd: 'toggle_pause', val: !isPaused }));
+});
+
+document.getElementById('exit-btn')?.addEventListener('click', () => {
+    if(confirm("Terminate AEGIS hardware loop?")) {
+        ws.send(JSON.stringify({ cmd: 'exit' }));
+        document.body.innerHTML = '<div style="background:#0b1120;color:#ef4444;height:100vh;display:flex;align-items:center;justify-content:center;font-family:monospace;font-size:32px;">SYSTEM TERMINATED</div>';
+    }
 });
