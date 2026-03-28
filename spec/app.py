@@ -19,7 +19,9 @@ from core.db_logger import build_logger
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 
-BANDS = [2.4e9 + (i * 10e6) for i in range(10)]
+# Legacy ISM channels within PlutoSDR hardware range (70 MHz – 6 GHz)
+# 433 MHz, 868 MHz, 915 MHz, 1.2 GHz, 2.4 GHz, 3.5 GHz, 4.9 GHz, 5.2 GHz, 5.5 GHz, 5.8 GHz
+BANDS = [433e6, 868e6, 915e6, 1.2e9, 2.4e9, 3.5e9, 4.9e9, 5.2e9, 5.5e9, 5.8e9]
 
 fastapi_app = FastAPI()
 
@@ -48,17 +50,14 @@ global_telemetry = {
     "forecast_array": [0.0, 0.0, 0.0],
     "radar_map": [],
     "eco_saving": 0,
+    "last_hop_db": "0.00",
     "pls_score": 100,
     "current_layer": "Legacy",
-    "layer_labels": []
+    "layer_labels": ["433M", "868M", "915M", "1.2G", "2.4G", "3.5G", "4.9G", "5.2G", "5.5G", "5.8G"]
 }
 
-LAYER_CONFIGS = {
-    "Legacy": {"start": 0.433, "step": 0.6, "unit": "GHz"},   # 433 MHz → ~5.9 GHz ISM
-    "cmWave": {"start": 7.0, "step": 1.7, "unit": "GHz"},      # 7 GHz → 24 GHz
-    "Sub-THz": {"start": 90.0, "step": 21.0, "unit": "GHz"},   # 90 GHz → 300 GHz
-    "THz": {"start": 300.0, "step": 970.0, "unit": "GHz"}       # 300 GHz → 10 THz
-}
+# Legacy ISM band only — all frequencies within ADALM-Pluto hardware range
+LAYER_CONFIG = {"start": 0.433, "step": 0.6, "unit": "GHz"}
 connected_clients = []
 
 @fastapi_app.websocket("/ws")
@@ -74,12 +73,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 logging.warning("User requested remote shutdown. Terminating...")
                 os._exit(0)
             elif cmd_data.get('cmd') == 'switch_layer':
-                layer = cmd_data.get('layer', 'cmWave')
-                if layer in LAYER_CONFIGS:
-                    global_telemetry["current_layer"] = layer
-                    if aegis.sdr.simulator:
-                        aegis.sdr.simulator.current_layer = layer
-                    logging.info(f"6G Air Interface: Switched to {layer} band.")
+                pass  # Only Legacy band supported — layer switching disabled
             elif cmd_data.get('cmd') == 'toggle_mode':
                 aegis.sdr.use_digital_twin = cmd_data.get('val', False)
                 if aegis.sdr.use_digital_twin:
@@ -190,6 +184,8 @@ class SpectreAegisController:
             host=db_host, user=db_user,
             password=db_pass, database=db_name, port=db_port
         )
+        self.last_freq = BANDS[0]
+        self.total_energy_score = 50.0 # Start at 50% efficiency baseline
         
     def execute_cycle(self):
         t_start = time.perf_counter()
@@ -279,6 +275,32 @@ class SpectreAegisController:
             self.sdr.transmit(tx_data)
             reward = self.rl_agent.compute_reward(is_busy=False, action_channel=self.current_channel_idx)
             
+        # ── Energy Saving Calculation (Frequency Transition Delta) ──────────
+        current_f = BANDS[self.current_channel_idx]
+        if current_f != self.last_freq:
+            import math
+            # S_dB = 20 * log10(f_prev / f_curr)
+            # Hopping to lower freq = positive saving
+            try:
+                delta_db = 20 * math.log10(self.last_freq / current_f)
+                global_telemetry["last_hop_db"] = f"{delta_db:+.2f}"
+                
+                # Update cumulative eco_saving score (normalized)
+                # Max hop delta is ~22.5 dB (5.8G to 433M). Map -25..+25 to -5..+5 weight.
+                weight = max(-5, min(5, delta_db / 5.0)) 
+                self.total_energy_score = max(0, min(100, self.total_energy_score + weight))
+                global_telemetry["eco_saving"] = int(self.total_energy_score)
+                
+                if delta_db > 0:
+                    logging.info(f"Energy Saving: {delta_db:+.2f} dB transition (Propagation bonus)")
+                else:
+                    logging.info(f"Energy Cost: {delta_db:+.2f} dB transition (Higher frequency propagation loss)")
+            except (ValueError, ZeroDivisionError):
+                pass
+            
+            self.last_freq = current_f
+        # ────────────────────────────────────────────────────────────────────
+            
         # 6G ISAC: Fetch spatial radar map
         global_telemetry["radar_map"] = self.sdr.get_sensing_radar()
         
@@ -299,7 +321,7 @@ class SpectreAegisController:
         
         # Update dynamic frequency labels for HUD
         layer = global_telemetry["current_layer"]
-        conf = LAYER_CONFIGS[layer]
+        conf = LAYER_CONFIG
         global_telemetry["layer_labels"] = [f"{(conf['start'] + i*conf['step']):.1f}{conf['unit']}" for i in range(10)]
         
         # Publish to Bridge (ORAN RIC)
@@ -313,7 +335,11 @@ class SpectreAegisController:
     def controller_thread(self):
         while self.run_loop:
             if not self.is_paused:
-                self.execute_cycle()
+                try:
+                    self.execute_cycle()
+                except Exception as e:
+                    logging.error(f"Error in controller cycle: {e}")
+                    time.sleep(1.0) # Recovery wait period before next attempt
                 
             # 6G Green Networking: Adaptive Sleep (Eco-Mode)
             # If prediction horizon is low (< 0.2 occupancy probability)
@@ -331,9 +357,18 @@ class SpectreAegisController:
                 
             time.sleep(sleep_time)
 
-# Ensure static folder exists
-os.makedirs("static", exist_ok=True)
-fastapi_app.mount("/", StaticFiles(directory="static", html=True), name="static")
+# Ensure static folder exists and has at least an empty style.css if missing
+_static_dir = os.path.join(os.path.dirname(__file__), "static")
+os.makedirs(_static_dir, exist_ok=True)
+
+# Explicitly serve the dashboard at /
+@fastapi_app.get("/")
+async def get_dashboard():
+    with open(os.path.join(_static_dir, "index.html"), "r", encoding="utf-8") as f:
+        return HTMLResponse(content=f.read())
+
+# Mount remaining static assets (CSS, JS)
+fastapi_app.mount("/", StaticFiles(directory=_static_dir), name="static")
 
 @fastapi_app.on_event("startup")
 async def startup_event():
@@ -343,16 +378,34 @@ async def startup_event():
 if __name__ == "__main__":
     import torch
 
+    # Load .env file if present (DB credentials live there, not in source)
+    _env_path = os.path.join(os.path.dirname(__file__), '.env')
+    _env = {}
+    if os.path.exists(_env_path):
+        with open(_env_path) as _f:
+            for _line in _f:
+                _line = _line.strip()
+                if _line and not _line.startswith('#') and '=' in _line:
+                    _k, _v = _line.split('=', 1)
+                    _env[_k.strip()] = _v.strip()
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--twin", action="store_true",
                         help="Launch with Digital Twin SDR simulator")
-    # MySQL logging (all optional – omit to disable DB logging)
-    parser.add_argument("--db-host", default=None, help="MySQL host (e.g. localhost)")
-    parser.add_argument("--db-port", type=int, default=3306, help="MySQL port (default 3306)")
-    parser.add_argument("--db-user", default=None, help="MySQL username")
-    parser.add_argument("--db-pass", default=None, help="MySQL password")
-    parser.add_argument("--db-name", default=None, help="MySQL database / schema name")
+    # MySQL logging — reads from .env by default, CLI args override.
+    parser.add_argument("--db-host", default=_env.get("DB_HOST", "localhost"),  help="MySQL host")
+    parser.add_argument("--db-port", type=int, default=int(_env.get("DB_PORT", 3306)), help="MySQL port")
+    parser.add_argument("--db-user", default=_env.get("DB_USER", "root"),       help="MySQL username")
+    parser.add_argument("--db-pass", default=_env.get("DB_PASS", ""),           help="MySQL password")
+    parser.add_argument("--db-name", default=_env.get("DB_NAME", "aegis"),      help="MySQL database name")
+    parser.add_argument("--no-db",   action="store_true",  help="Disable DB logging entirely")
     args = parser.parse_args()
+
+    # --no-db flag → wipe credentials so build_logger returns NullLogger
+    if args.no_db:
+        args.db_host = args.db_user = args.db_pass = args.db_name = None
+    else:
+        logging.info(f"DB Logging → {args.db_user}@{args.db_host}:{args.db_port}/{args.db_name}")
 
     aegis = SpectreAegisController(
         use_digital_twin=args.twin,
@@ -372,3 +425,4 @@ if __name__ == "__main__":
     finally:
         aegis.run_loop = False
         aegis.db.shutdown()
+

@@ -1,6 +1,6 @@
 // --- Internal Config & State ---
 // Default labels match Legacy ISM band (433 MHz → ~5.8 GHz), synced from backend on connect
-let freqLabels = ['433M', '1.0G', '1.6G', '2.2G', '2.4G', '2.8G', '3.4G', '4.0G', '5.2G', '5.8G'];
+let freqLabels = ['433M', '868M', '915M', '1.2G', '2.4G', '3.5G', '4.9G', '5.2G', '5.5G', '5.8G'];
 let currentViewMode = 'spectrum'; // 'spectrum' | 'waterfall' | 'grid'
 let waterfallHistory = [];
 const HISTORY_LEN = 80;
@@ -33,11 +33,12 @@ const rLog = document.getElementById('reasoning-log');
 const confSlider = document.getElementById('conf-slider');
 const pwrSlider = document.getElementById('pwr-slider');
 const confDisp = document.getElementById('conf-val-display');
-const pwrDisp = document.getElementById('pwr-val');
+const pwrDisp = document.getElementById('pwr-val-display');
 const predictDisp = document.getElementById('predict-val');
 const predictBar = document.getElementById('predict-bar');
 const priorityDisp = document.getElementById('priority-val');
 const ecoVal = document.getElementById('eco-val');
+const ecoHopVal = document.getElementById('eco-hop-val');
 const ecoBar = document.getElementById('eco-bar');
 const plsVal = document.getElementById('pls-val');
 
@@ -848,7 +849,7 @@ function logToTerminal(msg, type='normal') {
     if(!rLog) return;
     const line = document.createElement('div');
     line.className = `log-line ${type}`;
-    const timestamp = new Date().toLocaleTimeString('en-GB', { hour12: false, fractionDigits: 1 });
+    const timestamp = new Date().toLocaleTimeString('en-GB', { hour12: false });
     line.innerHTML = `<span style="color:var(--text-muted)">[${timestamp}]</span> ${msg}`;
     rLog.appendChild(line);
     rLog.scrollTop = rLog.scrollHeight;
@@ -1017,11 +1018,23 @@ ws.onmessage = (event) => {
         const ecoStr = data.eco_saving + '%';
         ecoVal.textContent = ecoStr;
         ecoBar.style.width = ecoStr;
+        
+        if (ecoHopVal && data.last_hop_db) {
+            const dbVal = parseFloat(data.last_hop_db);
+            ecoHopVal.textContent = data.last_hop_db + ' dB';
+            // Color code: green for positive (saving), red for negative (cost)
+            ecoHopVal.style.color = dbVal > 0 ? '#10b981' : dbVal < 0 ? '#ef4444' : 'var(--accent-cyan)';
+        }
     }
     
     if(plsVal) {
         plsVal.textContent = data.pls_score + '%';
         plsVal.style.color = data.pls_score > 80 ? '#10b981' : data.pls_score > 40 ? '#fbbf24' : '#ef4444';
+        const plsBar = document.getElementById('pls-bar');
+        if (plsBar) {
+            plsBar.style.width = data.pls_score + '%';
+            plsBar.style.background = data.pls_score > 80 ? '#10b981' : data.pls_score > 40 ? '#fbbf24' : '#ef4444';
+        }
     }
 
     if(confVal) confVal.textContent = `${(data.confidence * 100).toFixed(1)}%`;
@@ -1087,6 +1100,32 @@ document.getElementById('exit-btn')?.addEventListener('click', () => {
 // Terminal Minimize Toggle
 document.getElementById('log-minimize-btn')?.addEventListener('click', () => {
     document.getElementById('terminal-drawer')?.classList.toggle('collapsed');
+});
+
+// Reset HUD Button
+document.getElementById('reset-btn')?.addEventListener('click', () => {
+    // Reset all stats displays to defaults
+    if (latVal)       latVal.textContent  = '0 ms';
+    if (hoVal)        hoVal.textContent   = '0.00ms';
+    if (rVal)         rVal.textContent    = '0.000';
+    if (ecoVal)       ecoVal.textContent  = '0%';
+    if (ecoBar)       ecoBar.style.width  = '0%';
+    if (ecoHopVal) { ecoHopVal.textContent = '+0.00 dB'; ecoHopVal.style.color = 'var(--accent-cyan)'; }
+    if (predictDisp)  predictDisp.textContent = '0%';
+    if (predictBar)   predictBar.style.width   = '0%';
+    if (predConfVal)  predConfVal.textContent  = '---';
+    if (priorityDisp) priorityDisp.textContent = 'NONE';
+    const plsVal2 = document.getElementById('pls-val');
+    const plsBar  = document.getElementById('pls-bar');
+    if (plsVal2) { plsVal2.textContent = '100%'; plsVal2.style.color = '#10b981'; }
+    if (plsBar)  { plsBar.style.width = '100%'; plsBar.style.background = '#10b981'; }
+    // Clear log
+    if (rLog) rLog.innerHTML = '';
+    // Reset charts
+    if (lossChart) { lossChart.data.datasets[0].data = new Array(20).fill(0); lossChart.update('none'); }
+    learningSteps = 0;
+    if (stepVal) stepVal.textContent = '0';
+    logToTerminal('HUD reset by user.', 'success');
 });
 
 // AI Settings Sliders
@@ -1187,8 +1226,7 @@ function initCharts() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    setupTabs();
-    initRadar();
-    initFreqMatrix();
+    // initRadar, initFreqMatrix, initCharts are called here;
+    // initFrequencyGrid, initLossChart, initMIMO are called in the 'load' event above.
     initCharts();
 });

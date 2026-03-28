@@ -99,12 +99,16 @@ class SDRHandler:
         self.center_freq = int(frequency)
         if self.sdr is not None:
             # Updating LO frequencies triggers internal PLL recalibration
-            # Target is to keep this process < 10ms
-            t_start = time.perf_counter()
-            self.sdr.rx_lo = self.center_freq
-            self.sdr.tx_lo = self.center_freq
-            t_end = time.perf_counter()
-            logging.debug(f"Frequency hop to {frequency/1e6} MHz completed in {(t_end - t_start)*1000:.2f} ms")
+            try:
+                t_start = time.perf_counter()
+                self.sdr.rx_lo = self.center_freq
+                self.sdr.tx_lo = self.center_freq
+                t_end = time.perf_counter()
+                logging.debug(f"Frequency hop to {frequency/1e6} MHz completed in {(t_end - t_start)*1000:.2f} ms")
+            except OSError as e:
+                logging.warning(f"SDR hardware rejected frequency {frequency/1e6} MHz: {e}")
+            except Exception as e:
+                logging.error(f"Unexpected error during frequency hop: {e}")
 
     def set_beam_direction(self, beam_idx):
         """6G Massive MIMO: Sets the spatial beam index (Approximate direction)."""
@@ -136,13 +140,8 @@ class SDRHandler:
     # ═══════════════════════════════════════════════════════════════════════════
 
     def _get_layer_config(self) -> dict:
-        """Returns layer-specific algorithm parameters based on active simulator layer."""
-        layer = getattr(self.simulator, 'current_layer', 'Legacy') if self.simulator else 'Legacy'
-        return {
-            'Legacy':  {'max_objects': 12, 'range_max': 100.0, 'algorithm': 'bartlett', 'snr_db': -20.0},
-            'cmWave':  {'max_objects':  3, 'range_max':  80.0, 'algorithm': 'music',    'snr_db': -18.0},
-            'Sub-THz': {'max_objects':  5, 'range_max':  50.0, 'algorithm': 'music',    'snr_db': -15.0},
-        }.get(layer, {'max_objects': 8, 'range_max': 100.0, 'algorithm': 'music', 'snr_db': -20.0})
+        """Returns layer-specific algorithm parameters (Legacy only)."""
+        return {'max_objects': 12, 'range_max': 100.0, 'algorithm': 'bartlett', 'snr_db': -20.0}
 
     def _music_aoa(self, rx0: np.ndarray, rx1: np.ndarray, n_scan: int = 181) -> List[float]:
         """

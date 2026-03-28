@@ -35,9 +35,11 @@ CREATE TABLE IF NOT EXISTS aegis_logs (
     trend              VARCHAR(16),
     radar_targets      TINYINT,
     eco_saving         TINYINT,
+    last_hop_db        VARCHAR(16),
     current_layer      VARCHAR(16),
     reasoning_msg      VARCHAR(255)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 """
 
 _INSERT_SQL = """
@@ -45,12 +47,12 @@ INSERT INTO aegis_logs (
     ts, latency_ms, channel_idx, class_name, confidence,
     is_busy, reward, pls_score, event_trigger,
     prediction_horizon, trend, radar_targets,
-    eco_saving, current_layer, reasoning_msg
+    eco_saving, last_hop_db, current_layer, reasoning_msg
 ) VALUES (
     %(ts)s, %(latency_ms)s, %(channel_idx)s, %(class_name)s, %(confidence)s,
     %(is_busy)s, %(reward)s, %(pls_score)s, %(event_trigger)s,
     %(prediction_horizon)s, %(trend)s, %(radar_targets)s,
-    %(eco_saving)s, %(current_layer)s, %(reasoning_msg)s
+    %(eco_saving)s, %(last_hop_db)s, %(current_layer)s, %(reasoning_msg)s
 )
 """
 
@@ -129,6 +131,7 @@ class DBLogger:
             "trend":              str(telemetry.get("trend", ""))[:16],
             "radar_targets":      radar_targets,
             "eco_saving":         telemetry.get("eco_saving"),
+            "last_hop_db":        str(telemetry.get("last_hop_db", "0.00"))[:16],
             "current_layer":      str(telemetry.get("current_layer", ""))[:16],
             "reasoning_msg":      str(telemetry.get("reasoning_msg", ""))[:255],
         }

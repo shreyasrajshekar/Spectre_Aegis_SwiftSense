@@ -995,3 +995,92 @@ body::after {
     color: var(--accent-cyan);
     box-shadow: 0 0 8px rgba(34, 211, 238, 0.3);
 }
+
+/* ─── Halted Overlay (scan paused) ──────────────────────────────────────────── */
+.halted-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(11, 17, 32, 0.75);
+    backdrop-filter: blur(4px);
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    border-radius: 8px;
+    gap: 8px;
+    pointer-events: none;
+}
+.halted-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+}
+.halted-icon {
+    font-size: 36px;
+    opacity: 0.7;
+}
+.halted-text {
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: 3px;
+    color: var(--accent-amber);
+    font-family: 'JetBrains Mono', monospace;
+    text-shadow: 0 0 12px var(--accent-amber);
+}
+
+/* ─── Pause / Resume button ───────────────────────────────────────────────── */
+#pause-btn {
+    background: rgba(245, 158, 11, 0.1);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    color: #f59e0b;
+    padding: 8px 30px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.3s;
+    letter-spacing: 1px;
+}
+#pause-btn:hover {
+    background: rgba(245, 158, 11, 0.22);
+    border-color: #f59e0b;
+    box-shadow: 0 0 10px rgba(245, 158, 11, 0.25);
+}
+#pause-btn.paused {
+    background: rgba(16, 185, 129, 0.12);
+    border-color: rgba(16, 185, 129, 0.5);
+    color: #10b981;
+    box-shadow: 0 0 10px rgba(16, 185, 129, 0.2);
+}
+#pause-btn.paused:hover {
+    background: rgba(16, 185, 129, 0.22);
+}
+
+/* ─── Prediction card accent ──────────────────────────────────────────────── */
+.prediction-card {
+    border: 1px solid rgba(99, 102, 241, 0.25) !important;
+}
+
+/* ─── Stat card base (missing explicit definition) ───────────────────────── */
+.stat-card {
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 12px 14px;
+}
+.stat-label {
+    font-size: 9px;
+    font-weight: 700;
+    color: var(--text-muted);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+}
+.stat-value {
+    font-size: 22px;
+    font-weight: 700;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--text-main);
+}

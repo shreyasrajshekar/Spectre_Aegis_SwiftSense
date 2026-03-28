@@ -20,7 +20,7 @@
             }
         }
     </style>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Chart.js loaded once at end of body -->
 </head>
 
 <body>
@@ -42,9 +42,6 @@
             <div class="header-right">
                 <div class="frequency-tabs">
                     <button class="tab layer-tab active" data-layer="Legacy">Legacy (Sub-6GHz)</button>
-                    <button class="tab layer-tab" data-layer="cmWave">cmWave (7-24GHz)</button>
-                    <button class="tab layer-tab" data-layer="Sub-THz">Sub-THz (90-300GHz)</button>
-                    <button class="tab layer-tab" data-layer="THz">THz (300GHz+)</button>
                 </div>
                 <div class="status-indicators">
                     <span class="gpu-status">GPU: CPU</span>
@@ -66,7 +63,8 @@
                 <div class="hud-bracket hud-bracket-ne"></div>
                 <div class="hud-bracket hud-bracket-sw"></div>
                 <div class="hud-bracket hud-bracket-se"></div>
-                <div id="halted-overlay" class="halted-overlay" style="display: none;">
+                <div id="halted-overlay" class="halted-overlay"
+                    style="display: none; flex-direction: column; align-items: center; justify-content: center;">
                     <div class="halted-content">
                         <span class="halted-icon">⏸</span>
                         <span class="halted-text">SCAN HALTED</span>
@@ -109,161 +107,155 @@
             <!-- Side Panel (Left) -->
             <aside class="side-panel">
                 <div class="stat-card prediction-card" title="Higher confidence decreases probability of collision.">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                        <div class="stat-label">COLLISION RISK <span id="trend-icon" style="margin-left:4px; font-size:10px;">➡️</span></div>
-                        <div class="stat-value" id="predict-val" style="font-size:12px;">0%</div>
-                    </div>
-                    
+
+
                     <!-- Main Next-Hop Prediction Bar -->
-                    <div class="stat-bar" style="margin-bottom: 8px;">
-                        <div id="predict-bar" style="width: 0%; transition: background 0.3s;"></div>
-                    </div>
-                    
+
+
                     <!-- Multi-Horizon Timeline -->
-                    <div class="timeline-container">
-                        <div class="timeline-step">
-                            <span class="tl-label">+100ms</span>
-                            <div class="tl-bar-bg"><div id="tl-100" class="tl-bar-fill"></div></div>
-                        </div>
-                        <div class="timeline-step">
-                            <span class="tl-label">+200ms</span>
-                            <div class="tl-bar-bg"><div id="tl-200" class="tl-bar-fill"></div></div>
-                        </div>
-                        <div class="timeline-step">
-                            <span class="tl-label">+500ms</span>
-                            <div class="tl-bar-bg"><div id="tl-500" class="tl-bar-fill"></div></div>
-                        </div>
-                    </div>
-                    
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
-                        <div class="stat-label" style="font-size:8px;">AI CONFIDENCE</div>
-                        <div class="stat-value" id="pred-conf-val" style="font-size:10px; color:var(--text-muted);">---</div>
-                    </div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">ENERGY SAVING (ECO)</div>
-                    <div class="stat-value" id="eco-val">0%</div>
-                    <div class="stat-bar">
-                        <div id="eco-bar" style="width: 0%; background: #10b981;"></div>
-                    </div>
-                </div>
-                <!--<div class="stat-card">
-                <div class="stat-label">PLS TRUST SCORE</div>
-                <div class="stat-value" id="pls-val">100%</div>
-            </div> -->
-                <div class="stat-card">
-                    <div class="stat-label">SEMANTIC PRIORITY</div>
-                    <div class="stat-value" id="priority-val">NONE</div>
-                </div>
-                <section class="panel radar-panel">
-                    <div class="hud-bracket hud-bracket-nw"></div>
-                    <div class="hud-bracket hud-bracket-ne"></div>
-                    <div class="hud-bracket hud-bracket-sw"></div>
-                    <div class="hud-bracket hud-bracket-se"></div>
-                    <div class="panel-header">
-                        <span class="icon">📡</span> 6G SPATIAL SENSING (ISAC)
-                    </div>
-                    <div class="radar-container">
-                        <canvas id="radar-canvas"></canvas>
-                        <div class="radar-scan-line"></div>
-                    </div>
-                </section>
-                <section class="panel tune-panel">
-                    <div class="hud-bracket hud-bracket-nw"></div>
-                    <div class="hud-bracket hud-bracket-ne"></div>
-                    <div class="hud-bracket hud-bracket-sw"></div>
-                    <div class="hud-bracket hud-bracket-se"></div>
-                    <div class="panel-header">
-                        <h2>SYSTEM TUNING</h2>
-                    </div>
-                    <div class="tune-controls">
-                        <div class="control-group">
-                            <label>AI SENSITIVITY (CONFIDENCE)</label>
-                            <input type="range" id="conf-slider" min="0" max="1" step="0.05" value="0.5">
-                            <span id="conf-val-display" class="slider-val">0.50</span>
-                        </div>
-                        <div class="control-group">
-                            <label>SDR SQUELCH (POWER THRESHOLD)</label>
-                            <input type="range" id="pwr-slider" min="-100" max="0" step="1" value="-60">
-                            <span id="pwr-val-display" class="slider-val">-60 dB</span>
-                        </div>
-                        <div class="control-group" style="margin-top: 8px;">
-                            <label>D3QN COLLISION THRESHOLD</label>
-                            <input type="range" id="ai-thresh-slider" min="0" max="1" step="0.05" value="0.8">
-                            <span id="ai-thresh-display" class="slider-val">0.80</span>
-                        </div>
-                        <div class="control-group">
-                            <label>D3QN HISTORY WEIGHT</label>
-                            <input type="range" id="hist-w-slider" min="0" max="1" step="0.05" value="0.8">
-                            <span id="hist-w-display" class="slider-val">0.80</span>
-                        </div>
-                        <div class="control-group">
-                            <label>D3QN UNCERTAINTY WEIGHT</label>
-                            <input type="range" id="uncert-w-slider" min="0" max="1" step="0.05" value="0.2">
-                            <span id="uncert-w-display" class="slider-val">0.20</span>
-                        </div>
-                    </div>
-                </section>
 
-                <section class="panel health-panel">
-                    <div class="hud-bracket hud-bracket-nw"></div>
-                    <div class="hud-bracket hud-bracket-ne"></div>
-                    <div class="hud-bracket hud-bracket-sw"></div>
-                    <div class="hud-bracket hud-bracket-se"></div>
-                    <div class="panel-header">
-                        <h2>HEALTH & LATENCY</h2>
-                    </div>
-                    <div class="metrics-grid">
-                        <div class="metric-card">
-                            <span class="label">Frequency</span>
-                            <span class="value cyan" id="channel-val">0.434 GHz</span>
-                        </div>
-                        <div class="metric-card">
-                            <span class="label">Cycle Time</span>
-                            <span class="value cyan" id="latency-val">2ms</span>
-                        </div>
-                        <div class="metric-card">
-                            <span class="label">Handover Latency</span>
-                            <span class="value yellow" id="handover-val">0.00ms</span>
-                        </div>
-                        <div class="metric-card">
-                            <span class="label">Signal Power</span>
-                            <span class="value purple" id="power-val">32.1 dBm</span>
-                        </div>
-                    </div>
-                </section>
 
-                <!-- AI Engine -->
-                <section class="panel ai-panel">
-                    <div class="hud-bracket hud-bracket-nw"></div>
-                    <div class="hud-bracket hud-bracket-ne"></div>
-                    <div class="hud-bracket hud-bracket-sw"></div>
-                    <div class="hud-bracket hud-bracket-se"></div>
-                    <div class="panel-header">
-                        <h2>AI ENGINE</h2>
-                    </div>
-                    <div class="ai-metrics">
-                        <div class="metric-card ai-metric">
-                            <span class="label">Learning Steps</span>
-                            <span class="value cyan" id="steps-val">210</span>
+
+                    <div class="stat-card">
+                        <div class="stat-label">ENERGY SAVING (ECO)</div>
+                        <div style="display:flex; align-items:baseline; gap:8px;">
+                            <div class="stat-value" id="eco-val" style="color:#10b981;">50%</div>
+                            <div
+                                style="font-size:18px; font-weight:700; color:var(--text-muted); letter-spacing:0.5px;">
+                                Last Hop: <span id="eco-hop-val"
+                                    style="color:var(--accent-cyan); font-family:'JetBrains Mono',monospace;">+0.00
+                                    dB</span></div>
                         </div>
-                        <div class="metric-card ai-metric">
-                            <span class="label">D3QN Loss</span>
-                            <span class="value cyan" id="reward-val">10.000</span>
+                        <div class="stat-bar" style="margin-top:6px;">
+                            <div id="eco-bar" style="width: 50%; background: #10b981;"></div>
                         </div>
                     </div>
-                    <!-- Chart Tabs -->
-                    <div class="ai-tabs" style="display: flex; gap: 10px; margin-bottom: 10px; padding: 0 16px;">
-                        <button id="tab-loss" class="ai-tab active">Learning Loss</button>
-                        <button id="tab-acc" class="ai-tab">Prediction Accuracy</button>
+
+                    <div class="stat-card">
+                        <div class="stat-label">NETWORK STATS</div>
+                        <div class="stat-value" id="priority-val">NONE</div>
                     </div>
-                    <div class="chart-container ai-chart" id="loss-chart-container">
-                        <canvas id="loss-canvas"></canvas>
-                    </div>
-                    <div class="chart-container ai-chart" id="acc-chart-container" style="display: none;">
-                        <canvas id="acc-canvas"></canvas>
-                    </div>
-                </section>
+                    <section class="panel radar-panel">
+                        <div class="hud-bracket hud-bracket-nw"></div>
+                        <div class="hud-bracket hud-bracket-ne"></div>
+                        <div class="hud-bracket hud-bracket-sw"></div>
+                        <div class="hud-bracket hud-bracket-se"></div>
+                        <div class="panel-header">
+                            <span class="icon">📡</span> 5G/6G SPATIAL SENSING (ISAC)
+                        </div>
+                        <div class="radar-container">
+                            <canvas id="radar-canvas"></canvas>
+                            <div class="radar-scan-line"></div>
+                        </div>
+                    </section>
+                    <section class="panel tune-panel">
+                        <div class="hud-bracket hud-bracket-nw"></div>
+                        <div class="hud-bracket hud-bracket-ne"></div>
+                        <div class="hud-bracket hud-bracket-sw"></div>
+                        <div class="hud-bracket hud-bracket-se"></div>
+                        <div class="panel-header">
+                            <h2>SYSTEM TUNING</h2>
+                        </div>
+                        <div class="tune-controls">
+                            <div class="control-group">
+                                <label>AI SENSITIVITY (CONFIDENCE)</label>
+                                <input type="range" id="conf-slider" min="0" max="1" step="0.05" value="0.5">
+                                <span id="conf-val-display" class="slider-val">0.50</span>
+                            </div>
+                            <div class="control-group">
+                                <label>SDR SQUELCH (POWER THRESHOLD)</label>
+                                <input type="range" id="pwr-slider" min="-100" max="0" step="1" value="-60">
+                                <span id="pwr-val-display" class="slider-val">-60 dB</span>
+                            </div>
+                            <div class="control-group" style="margin-top: 8px;">
+                                <label>D3QN COLLISION THRESHOLD</label>
+                                <input type="range" id="ai-thresh-slider" min="0" max="1" step="0.05" value="0.8">
+                                <span id="ai-thresh-display" class="slider-val">0.80</span>
+                            </div>
+                            <div class="control-group">
+                                <label>D3QN HISTORY WEIGHT</label>
+                                <input type="range" id="hist-w-slider" min="0" max="1" step="0.05" value="0.8">
+                                <span id="hist-w-display" class="slider-val">0.80</span>
+                            </div>
+                            <div class="control-group">
+                                <label>D3QN UNCERTAINTY WEIGHT</label>
+                                <input type="range" id="uncert-w-slider" min="0" max="1" step="0.05" value="0.2">
+                                <span id="uncert-w-display" class="slider-val">0.20</span>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="panel health-panel">
+                        <div class="hud-bracket hud-bracket-nw"></div>
+                        <div class="hud-bracket hud-bracket-ne"></div>
+                        <div class="hud-bracket hud-bracket-sw"></div>
+                        <div class="hud-bracket hud-bracket-se"></div>
+                        <div class="panel-header">
+                            <h2>HEALTH & LATENCY</h2>
+                        </div>
+                        <div class="metrics-grid">
+                            <div class="metric-card">
+                                <span class="label">Frequency</span>
+                                <span class="value cyan" id="channel-val">0.434 GHz</span>
+                            </div>
+                            <div class="metric-card">
+                                <span class="label">Cycle Time</span>
+                                <span class="value cyan" id="latency-val">2ms</span>
+                            </div>
+                            <div class="metric-card">
+                                <span class="label">Handover Latency</span>
+                                <span class="value yellow" id="handover-val">0.00ms</span>
+                            </div>
+                            <div class="metric-card">
+                                <span class="label">Signal Power</span>
+                                <span class="value purple" id="power-val">32.1 dBm</span>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- AI Engine -->
+                    <section class="panel ai-panel">
+                        <div class="hud-bracket hud-bracket-nw"></div>
+                        <div class="hud-bracket hud-bracket-ne"></div>
+                        <div class="hud-bracket hud-bracket-sw"></div>
+                        <div class="hud-bracket hud-bracket-se"></div>
+                        <div class="panel-header">
+                            <h2>AI ENGINE</h2>
+                        </div>
+                        <!-- Signal ID display: updated by JS via classNameVal / confVal -->
+                        <div style="display:flex;align-items:center;justify-content:space-between;padding:0 2px 10px;">
+                            <div style="font-size:9px;font-weight:700;color:var(--text-muted);letter-spacing:1px;">
+                                DETECTED
+                                SIGNAL</div>
+                            <div style="display:flex;gap:8px;align-items:center;">
+                                <span id="class-name-val"
+                                    style="font-size:12px;font-weight:800;font-family:'JetBrains Mono',monospace;color:#10b981;">Idle</span>
+                                <span id="conf-val"
+                                    style="font-size:10px;font-family:'JetBrains Mono',monospace;color:var(--text-muted);">0.0%</span>
+                            </div>
+                        </div>
+                        <div class="ai-metrics">
+                            <div class="metric-card ai-metric">
+                                <span class="label">Learning Steps</span>
+                                <span class="value cyan" id="steps-val">210</span>
+                            </div>
+                            <div class="metric-card ai-metric">
+                                <span class="label">D3QN Loss</span>
+                                <span class="value cyan" id="reward-val">10.000</span>
+                            </div>
+                        </div>
+                        <!-- Chart Tabs -->
+                        <div class="ai-tabs" style="display: flex; gap: 10px; margin-bottom: 10px; padding: 0 16px;">
+                            <button id="tab-loss" class="ai-tab active">Learning Loss</button>
+                            <button id="tab-acc" class="ai-tab">Prediction Accuracy</button>
+                        </div>
+                        <div class="chart-container ai-chart" id="loss-chart-container">
+                            <canvas id="loss-canvas"></canvas>
+                        </div>
+                        <div class="chart-container ai-chart" id="acc-chart-container" style="display: none;">
+                            <canvas id="acc-canvas"></canvas>
+                        </div>
+                    </section>
             </aside>
         </main>
 
