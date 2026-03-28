@@ -15,6 +15,7 @@ from core.sdr_handler import SDRHandler
 from core.dsp import FastSpectrogramProcessor
 from ai.sensing_cnn import InferenceEngine
 from ai.decision_d3qn import RLController
+from core.db_logger import build_logger
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 
@@ -42,6 +43,9 @@ global_telemetry = {
     "active_beam": 0,
     "priority": 0.0,
     "prediction_horizon": 0.0,
+    "prediction_confidence": 0.0,
+    "trend": "stable",
+    "forecast_array": [0.0, 0.0, 0.0],
     "radar_map": [],
     "eco_saving": 0,
     "pls_score": 100,
@@ -95,12 +99,21 @@ async def websocket_endpoint(websocket: WebSocket):
             elif cmd_data.get('cmd') == 'update_params':
                 conf = cmd_data.get('conf')
                 pwr = cmd_data.get('pwr')
+                ai_thresh = cmd_data.get('ai_thresh')
+                hist_w = cmd_data.get('hist_w')
+                uncert_w = cmd_data.get('uncert_w')
                 if conf is not None:
                     aegis.cnn.confidence_threshold = conf
                     global_telemetry["conf_threshold"] = conf
                 if pwr is not None:
                     aegis.power_threshold = pwr
                     global_telemetry["pwr_threshold"] = pwr
+                if ai_thresh is not None:
+                    aegis.rl_agent.collision_threshold = ai_thresh
+                if hist_w is not None:
+                    aegis.rl_agent.history_weight = hist_w
+                if uncert_w is not None:
+                    aegis.rl_agent.uncertainty_weight = uncert_w
             elif cmd_data.get('cmd') == 'toggle_manual_mode':
                 aegis.manual_override = cmd_data.get('val', False)
                 global_telemetry["manual_mode"] = aegis.manual_override
@@ -158,7 +171,8 @@ class RICBridge:
             pass
 
 class SpectreAegisController:
-    def __init__(self, use_digital_twin=False):
+    def __init__(self, use_digital_twin=False, db_host=None, db_user=None,
+                 db_pass=None, db_name=None, db_port=3306):
         logging.info("Initializing Spectre AEGIS Controller...")
         self.sdr = SDRHandler(use_digital_twin=use_digital_twin, center_freq=BANDS[0])
         self.dsp = FastSpectrogramProcessor()
@@ -171,6 +185,11 @@ class SpectreAegisController:
         self.manual_override = False
         self.power_threshold = -60.0
         self.is_paused = False
+        # MySQL telemetry sink (NullLogger if no credentials supplied)
+        self.db = build_logger(
+            host=db_host, user=db_user,
+            password=db_pass, database=db_name, port=db_port
+        )
         
     def execute_cycle(self):
         t_start = time.perf_counter()
@@ -213,11 +232,16 @@ class SpectreAegisController:
         self.rl_agent.push_state(is_busy, avg_pwr, priority)
         
         # 6G Temporal Twin: Lead-time Prediction
-        prediction = self.rl_agent.predict_future_occupancy()
-        global_telemetry["prediction_horizon"] = round(prediction, 3)
+        pred_conf, trend, forecast = self.rl_agent.predict_future_occupancy()
+        prediction = forecast[0]  # 100ms prediction is the immediate action trigger
         
-        # Proactive Vacation Logic: If predicted occupancy > 0.8, trigger early hop
-        is_collision_predicted = prediction > 0.8
+        global_telemetry["prediction_horizon"] = round(prediction, 3)
+        global_telemetry["prediction_confidence"] = round(pred_conf, 3)
+        global_telemetry["trend"] = trend
+        global_telemetry["forecast_array"] = [round(f, 3) for f in forecast]
+        
+        # Proactive Vacation Logic: If predicted occupancy > dynamic collision_threshold, trigger early hop
+        is_collision_predicted = prediction > self.rl_agent.collision_threshold
         
         global_telemetry["event_trigger"] = "predictive_vacate" if is_collision_predicted else None
         
@@ -240,7 +264,7 @@ class SpectreAegisController:
                 self.current_channel_idx = action_ch
                 self.current_beam_idx = action_beam
                 
-                reason = "PREDICTIVE" if is_collision_predicted else "REACTIVE"
+                reason = "VACATE" if is_collision_predicted else "REACTIVE"
                 global_telemetry["reasoning_msg"] = f"{reason}: PU '{class_name}' @ CH{self.current_channel_idx} -> Hop CH{action_ch} BEAM{action_beam}"
             else:
                 global_telemetry["reasoning_msg"] = f"Manual Override active. PU detected but hold frequency."
@@ -280,7 +304,10 @@ class SpectreAegisController:
         
         # Publish to Bridge (ORAN RIC)
         self.ric_bridge.publish_metrics(global_telemetry)
-        
+
+        # Persist telemetry row to MySQL (non-blocking — queued async)
+        self.db.log(global_telemetry)
+
         return lat, reward
 
     def controller_thread(self):
@@ -292,9 +319,12 @@ class SpectreAegisController:
             # If prediction horizon is low (< 0.2 occupancy probability)
             # we can sleep longer to save energy
             pred = float(global_telemetry.get("prediction_horizon", 0.0))
-            if pred < 0.2:
-                sleep_time = 0.2 # 5Hz sensing (Eco)
+            if pred < 0.15:
+                sleep_time = 0.2 # 5Hz sensing (Eco MAX)
                 global_telemetry["eco_saving"] = 75
+            elif pred < 0.35:
+                sleep_time = 0.1 # 10Hz sensing (Eco Light)
+                global_telemetry["eco_saving"] = 50
             else:
                 sleep_time = 0.05 # 20Hz sensing (Active)
                 global_telemetry["eco_saving"] = 0
@@ -312,15 +342,33 @@ async def startup_event():
     
 if __name__ == "__main__":
     import torch
-    
+
     parser = argparse.ArgumentParser()
-    parser.add_argument("--twin", action="store_true", help="Launch with Digital Twin SDR simulator")
+    parser.add_argument("--twin", action="store_true",
+                        help="Launch with Digital Twin SDR simulator")
+    # MySQL logging (all optional – omit to disable DB logging)
+    parser.add_argument("--db-host", default=None, help="MySQL host (e.g. localhost)")
+    parser.add_argument("--db-port", type=int, default=3306, help="MySQL port (default 3306)")
+    parser.add_argument("--db-user", default=None, help="MySQL username")
+    parser.add_argument("--db-pass", default=None, help="MySQL password")
+    parser.add_argument("--db-name", default=None, help="MySQL database / schema name")
     args = parser.parse_args()
-    
-    aegis = SpectreAegisController(use_digital_twin=args.twin)
+
+    aegis = SpectreAegisController(
+        use_digital_twin=args.twin,
+        db_host=args.db_host,
+        db_user=args.db_user,
+        db_pass=args.db_pass,
+        db_name=args.db_name,
+        db_port=args.db_port,
+    )
     # Start the hardware RT loop in a separate thread so Uvicorn runs unblocked on main
     t = threading.Thread(target=aegis.controller_thread, daemon=True)
     t.start()
-    
+
     logging.info("Starting Aegis Dashboard Server at http://localhost:8000")
-    uvicorn.run(fastapi_app, host="0.0.0.0", port=8000, log_level="error")
+    try:
+        uvicorn.run(fastapi_app, host="0.0.0.0", port=8000, log_level="error")
+    finally:
+        aegis.run_loop = False
+        aegis.db.shutdown()

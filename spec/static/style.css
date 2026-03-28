@@ -473,13 +473,114 @@ body::after {
 .expanded-panel {
     max-height: 0;
     overflow: hidden;
-    transition: max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.4s ease;
+    transition: max-height 0.45s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.4s ease;
     opacity: 0;
 }
 .expanded-panel.open {
-    max-height: 250px;
+    max-height: 240px;
     opacity: 1;
     margin-top: 5px;
+}
+
+/* ─── Individual frequency channel cards (expanded panel) ─────────────────── */
+.fch-grid {
+    display: grid;
+    grid-template-columns: repeat(10, 1fr);
+    gap: 6px;
+    width: 100%;
+}
+
+.fch-card {
+    position: relative;
+    background: rgba(11, 17, 32, 0.9);
+    border: 1px solid rgba(34, 211, 238, 0.10);
+    border-radius: 7px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 6px 4px 5px;
+    gap: 4px;
+    cursor: pointer;
+    transition:
+        border-color 0.22s ease,
+        box-shadow   0.22s ease,
+        opacity      0.22s ease,
+        transform    0.15s ease;
+    overflow: hidden;
+    min-width: 0;
+}
+.fch-card:hover {
+    border-color: rgba(34, 211, 238, 0.4);
+    transform: translateY(-2px);
+}
+
+/* Active = currently tuned channel */
+.fch-card.fch-active {
+    border: 2px solid #22d3ee;
+    box-shadow:
+        0 0 16px rgba(34, 211, 238, 0.65),
+        inset 0 0 12px rgba(34, 211, 238, 0.06);
+    background: rgba(34, 211, 238, 0.05);
+    opacity: 1 !important;
+    transform: translateY(-2px);
+}
+.fch-card.fch-active .fch-label { color: #22d3ee; text-shadow: 0 0 8px #22d3ee; }
+.fch-card.fch-active .fch-qval   { color: #22d3ee; }
+
+/* Busy = AI detected PU on this channel */
+.fch-card.fch-busy {
+    border-color: #ef4444;
+    box-shadow: 0 0 12px rgba(239, 68, 68, 0.45);
+}
+.fch-card.fch-busy .fch-label  { color: #ef4444; }
+.fch-card.fch-busy .fch-qval   { color: #ef4444; }
+
+/* Dim all non-active cards when there is an active one */
+.fch-grid.has-active .fch-card:not(.fch-active) {
+    opacity: 0.45;
+}
+
+/* Busy strip at top of card */
+.fch-busy-strip {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 2px;
+    border-radius: 7px 7px 0 0;
+    background: transparent;
+    transition: background 0.2s;
+}
+.fch-card.fch-busy  .fch-busy-strip { background: linear-gradient(90deg, transparent, #ef4444, transparent); animation: busyPulse 1.2s ease-in-out infinite; }
+.fch-card.fch-active .fch-busy-strip { background: linear-gradient(90deg, transparent, #22d3ee, transparent); animation: none; }
+
+/* Freq label */
+.fch-label {
+    font-size: 8.5px;
+    font-weight: 800;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--text-muted);
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+    transition: color 0.2s, text-shadow 0.2s;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
+/* Mini canvas */
+.fch-canvas {
+    width: 100%;
+    height: 56px;
+    display: block;
+    border-radius: 4px;
+}
+
+/* Q-value badge at bottom */
+.fch-qval {
+    font-size: 8px;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--text-muted);
+    transition: color 0.2s;
+    letter-spacing: 0.2px;
 }
 
 /* Tune Controls */
@@ -501,6 +602,7 @@ body::after {
 }
 .tune-controls input[type=range] {
     -webkit-appearance: none;
+    appearance: none;
     width: 100%;
     height: 4px;
     background: rgba(255,255,255,0.1);
@@ -536,6 +638,30 @@ body::after {
     height: 150px;
     overflow: hidden;
     box-shadow: inset 0 0 20px rgba(0,0,0,0.5);
+    transition: height 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.terminal-drawer.collapsed {
+    height: 38px; /* Just the header */
+}
+.log-minimize-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.2s, transform 0.2s;
+    outline: none;
+}
+.log-minimize-btn:hover {
+    color: var(--accent-cyan);
+}
+.terminal-drawer.collapsed .log-minimize-btn {
+    transform: rotate(180deg);
 }
 .terminal-header {
     background: rgba(255,255,255,0.03);
@@ -652,3 +778,220 @@ body::after {
     to { background-position: 0 100%; }
 }
 
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   FREQUENCY CHANNEL GRID VIEW
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Panel header now holds two buttons side-by-side */
+.panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+}
+.view-mode-btns {
+    display: flex;
+    gap: 4px;
+}
+
+/* ─── Grid container ──────────────────────────────────────────────────────── */
+.frequency-grid-container {
+    flex: 1;
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    grid-template-rows: repeat(2, 1fr);
+    gap: 8px;
+    padding: 4px 0;
+    animation: gridFadeIn 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+@keyframes gridFadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ─── Individual channel card ─────────────────────────────────────────────── */
+.frequency-grid-item {
+    position: relative;
+    background: rgba(15, 23, 42, 0.85);
+    border: 1px solid rgba(34, 211, 238, 0.12);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 5px 4px 4px;
+    gap: 3px;
+    cursor: pointer;
+    transition:
+        border-color 0.2s ease,
+        box-shadow   0.2s ease,
+        opacity      0.25s ease,
+        transform    0.15s ease;
+    overflow: hidden;
+}
+.frequency-grid-item:hover {
+    border-color: rgba(34, 211, 238, 0.35);
+    transform: translateY(-1px);
+}
+
+/* Active channel: bright cyan glow */
+.frequency-grid-item.channel-active {
+    border: 2px solid #22d3ee;
+    box-shadow:
+        0 0 14px rgba(34, 211, 238, 0.6),
+        inset 0 0 10px rgba(34, 211, 238, 0.07);
+    opacity: 1 !important;
+}
+.frequency-grid-item.channel-active .ch-label {
+    color: #22d3ee;
+    text-shadow: 0 0 8px #22d3ee;
+}
+
+/* Dim non-active channels when an active one exists */
+.frequency-grid-container.has-active .frequency-grid-item:not(.channel-active) {
+    opacity: 0.45;
+}
+
+/* ─── Channel label ───────────────────────────────────────────────────────── */
+.ch-label {
+    font-size: 9px;
+    font-weight: 800;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--text-muted);
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+    transition: color 0.2s, text-shadow 0.2s;
+    z-index: 1;
+}
+
+/* ─── Mini canvas ─────────────────────────────────────────────────────────── */
+.ch-canvas {
+    width: 100%;
+    flex: 1;
+    border-radius: 4px;
+    display: block;
+    min-height: 48px;
+}
+
+/* ─── Power badge ─────────────────────────────────────────────────────────── */
+.ch-power-badge {
+    position: absolute;
+    bottom: 4px;
+    right: 5px;
+    font-size: 8px;
+    font-family: 'JetBrains Mono', monospace;
+    color: rgba(255,255,255,0.35);
+    transition: color 0.2s;
+}
+.frequency-grid-item.channel-active .ch-power-badge {
+    color: var(--accent-cyan);
+}
+
+/* ─── Busy indicator strip ────────────────────────────────────────────────── */
+.ch-busy-strip {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 2px;
+    background: transparent;
+    border-radius: 8px 8px 0 0;
+    transition: background 0.25s;
+}
+.frequency-grid-item.ch-is-busy .ch-busy-strip {
+    background: linear-gradient(90deg, transparent, #ef4444, transparent);
+    animation: busyPulse 1.2s ease-in-out infinite;
+}
+.frequency-grid-item.channel-active .ch-busy-strip {
+    background: linear-gradient(90deg, transparent, #22d3ee, transparent);
+    animation: none;
+}
+@keyframes busyPulse {
+    0%, 100% { opacity: 0.4; }
+    50%       { opacity: 1; }
+}
+
+/* ─── psd-wrapper show/hide transitions ──────────────────────────────────── */
+.psd-panel.grid-mode .psd-wrapper {
+    display: none;
+}
+.psd-panel.grid-mode .frequency-grid-container {
+    display: grid !important;
+}
+
+/* ─── control-btn (Reset HUD) ─────────────────────────────────────────────── */
+.control-btn {
+    background: rgba(100, 116, 139, 0.1);
+    border: 1px solid rgba(100, 116, 139, 0.3);
+    color: #94a3b8;
+    padding: 8px 20px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.3s;
+    letter-spacing: 1px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.control-btn:hover {
+    background: rgba(100, 116, 139, 0.2);
+    border-color: #94a3b8;
+}
+
+/* Timeline & Risk */
+.timeline-container {
+    display: flex;
+    gap: 8px;
+    width: 100%;
+    margin-top: 6px;
+}
+.timeline-step {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.tl-label {
+    font-size: 8px;
+    color: var(--text-muted);
+    font-weight: 700;
+    text-align: center;
+}
+.tl-bar-bg {
+    width: 100%;
+    height: 4px;
+    background: rgba(0,0,0,0.4);
+    border-radius: 2px;
+    overflow: hidden;
+}
+.tl-bar-fill {
+    height: 100%;
+    width: 0%;
+    background: var(--accent-cyan);
+    transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1), background 0.3s;
+}
+
+/* Chart Tabs */
+.ai-tab {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--panel-border);
+    color: var(--text-muted);
+    font-size: 9px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.ai-tab:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.1);
+}
+.ai-tab.active {
+    background: rgba(34, 211, 238, 0.15);
+    border-color: var(--accent-cyan);
+    color: var(--accent-cyan);
+    box-shadow: 0 0 8px rgba(34, 211, 238, 0.3);
+}

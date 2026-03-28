@@ -58,6 +58,16 @@ class RLController:
         self.epsilon_min = 0.01
         self.epsilon_decay = 0.995
         
+        # Dynamic AI Configuration Parameters
+        self.prediction_window_ms = 100
+        self.collision_threshold = 0.8
+        self.history_weight = 0.8
+        self.uncertainty_weight = 0.2
+        self.exp_decay_lambda = 0.1  # Decay rate for temporal weighting
+        
+        # Auditing Logger
+        self.audit_log = deque(maxlen=1000)
+        
         self.q_network = D3QN_LSTM(state_dim, action_dim).to(self.device)
         self.target_network = D3QN_LSTM(state_dim, action_dim).to(self.device)
         self.target_network.load_state_dict(self.q_network.state_dict())
@@ -78,8 +88,16 @@ class RLController:
         self.historical_state.append([1.0 if is_busy else 0.0, norm_pwr, priority])
         
     def get_current_sequence(self):
-        """Returns tensor of shape (1, SequenceLength, Features)"""
-        seq = np.array(self.historical_state)
+        """Returns tensor of shape (1, SequenceLength, Features) with temporal exponential decay applied to occupancy"""
+        seq = np.array(self.historical_state, dtype=np.float32)
+        # Apply exponential decay S_new = S_t * e^(-lambda * steps_ago)
+        # where steps_ago is 0 for the most recent state and increases for older states.
+        num_steps = len(seq)
+        for i in range(num_steps):
+            steps_ago = num_steps - 1 - i
+            decay_factor = np.exp(-self.exp_decay_lambda * steps_ago)
+            seq[i, 0] *= decay_factor  # Apply decay to Occupancy channel
+            
         tensor = torch.FloatTensor(seq).unsqueeze(0).to(self.device)
         return tensor
 
@@ -99,17 +117,50 @@ class RLController:
         beam_idx = action_idx % 4
         return ch_idx, beam_idx
 
-    def predict_future_occupancy(self) -> float:
-        """6G Temporal Twin: Predicts probability of occupancy in the next 100ms."""
+    def get_occupancy_trend(self, n=5):
+        """Calculates the trend slope of the last N occupancy states."""
+        if len(self.historical_state) < n:
+            return 0.0, 'stable'
+        # Get last N occupancy states
+        y = np.array([state[0] for state in list(self.historical_state)[-n:]])
+        x = np.arange(n)
+        slope = np.polyfit(x, y, 1)[0]
+        if slope > 0.05:
+            return slope, 'rising'
+        elif slope < -0.05:
+            return slope, 'falling'
+        return slope, 'stable'
+
+    def predict_future_occupancy(self):
+        """6G Temporal Twin: Predicts probability of occupancy for multiple horizons and calculates Q-Entropy."""
         state_seq = self.get_current_sequence()
+        
+        # Base prediction on recent occupancy history
+        recent_occupancy = sum([state[0] for state in self.historical_state]) / max(len(self.historical_state), 1)
+        
         with torch.no_grad():
             q_values, _ = self.q_network(state_seq)
-            # Higher Q-values for 'Staying' actions imply probable occupancy elsewhere, 
-            # but we use the value stream here as a surrogate for state evolution.
-            # Real forecast would use a separate regression head, 
-            # here we approximate it from the hidden state.
-            hidden_norm = torch.sigmoid(q_values.mean()).item()
-        return hidden_norm
+            # Calculate Probability distribution via Softmax
+            probabilities = torch.softmax(q_values, dim=1)
+            # Compute Shannon Entropy: H(Q) = -sum(P * log2(P))
+            entropy = -torch.sum(probabilities * torch.log2(probabilities + 1e-9)).item()
+            # Normalize entropy (max entropy for 40 actions is log2(40) ~ 5.32)
+            max_entropy = np.log2(self.action_dim)
+            normalized_entropy = min(entropy / max_entropy, 1.0)
+            
+        slope, trend_str = self.get_occupancy_trend()
+        
+        # Combine history and model uncertainty
+        base_pred = (recent_occupancy * self.history_weight) + (normalized_entropy * self.uncertainty_weight)
+        
+        # Multi-horizon forecast [100ms, 200ms, 500ms]
+        pred_100 = float(np.clip(base_pred, 0.05, 0.95))
+        pred_200 = float(np.clip(base_pred + slope * 1.0, 0.05, 0.95)) # Extrapolate trend slightly
+        pred_500 = float(np.clip(base_pred + slope * 4.0, 0.05, 0.95)) # Extrapolate trend further
+        
+        prediction_confidence = 1.0 - normalized_entropy
+        
+        return prediction_confidence, trend_str, [pred_100, pred_200, pred_500]
         
     def compute_reward(self, is_busy: bool, action_channel: int) -> float:
         """

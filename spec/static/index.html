@@ -20,6 +20,7 @@
             }
         }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 
 <body>
@@ -49,10 +50,10 @@
                     <span class="gpu-status">GPU: CPU</span>
                     <span id="mode-toggle" class="mode-tag auto" style="cursor: pointer;">AUTO</span>
                     <span class="mode-tag linked">SDR: LINKED</span>
-                    <div class="mimo-container">
+                    <!-- <div class="mimo-container">
                         <canvas id="mimo-canvas"></canvas>
                         <div class="mimo-label">6G SPATIAL BEAMFORMING</div>
-                    </div>
+                    </div> -->
                 </div>
             </div>
         </header>
@@ -72,10 +73,15 @@
                     </div>
                 </div>
                 <div class="panel-header">
-                    <h2>SPECTRUM INTENSITY (PSD)</h2>
-                    <button id="view-toggle-btn" class="icon-btn" title="Toggle Spectrum/Waterfall">
-                        <span id="view-mode-icon">📊</span>
-                    </button>
+                    <h2 id="psd-panel-title">SPECTRUM INTENSITY (PSD)</h2>
+                    <div class="view-mode-btns">
+                        <button id="view-toggle-btn" class="icon-btn" title="Toggle View Mode">
+                            <span id="view-mode-icon">📊</span>
+                        </button>
+                        <button id="grid-toggle-btn" class="icon-btn" title="Channel Grid View">
+                            <span>📱</span>
+                        </button>
+                    </div>
                 </div>
                 <!-- Custom container to house y-axis and chart alongside each other similar to the image -->
                 <div class="psd-wrapper">
@@ -92,29 +98,63 @@
                         <canvas id="spectrum-canvas" height="207"></canvas>
                     </div>
                 </div>
+
+                <!-- Frequency Channel Grid (shown in grid-view mode) -->
+                <div id="freq-grid-container" class="frequency-grid-container" style="display:none;">
+                    <!-- 10 mini-canvases injected by JS -->
+                </div>
             </section>
 
             <!-- Right Column -->
             <!-- Side Panel (Left) -->
             <aside class="side-panel">
-            <div class="stat-card">
-                <div class="stat-label">PREDICTION HORIZON</div>
-                <div class="stat-value" id="predict-val">0%</div>
-                <div class="stat-bar"><div id="predict-bar" style="width: 0%"></div></div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">ENERGY SAVING (ECO)</div>
-                <div class="stat-value" id="eco-val">0%</div>
-                <div class="stat-bar"><div id="eco-bar" style="width: 0%; background: #10b981;"></div></div>
-            </div>
-            <div class="stat-card">
+                <div class="stat-card prediction-card" title="Higher confidence decreases probability of collision.">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                        <div class="stat-label">COLLISION RISK <span id="trend-icon" style="margin-left:4px; font-size:10px;">➡️</span></div>
+                        <div class="stat-value" id="predict-val" style="font-size:12px;">0%</div>
+                    </div>
+                    
+                    <!-- Main Next-Hop Prediction Bar -->
+                    <div class="stat-bar" style="margin-bottom: 8px;">
+                        <div id="predict-bar" style="width: 0%; transition: background 0.3s;"></div>
+                    </div>
+                    
+                    <!-- Multi-Horizon Timeline -->
+                    <div class="timeline-container">
+                        <div class="timeline-step">
+                            <span class="tl-label">+100ms</span>
+                            <div class="tl-bar-bg"><div id="tl-100" class="tl-bar-fill"></div></div>
+                        </div>
+                        <div class="timeline-step">
+                            <span class="tl-label">+200ms</span>
+                            <div class="tl-bar-bg"><div id="tl-200" class="tl-bar-fill"></div></div>
+                        </div>
+                        <div class="timeline-step">
+                            <span class="tl-label">+500ms</span>
+                            <div class="tl-bar-bg"><div id="tl-500" class="tl-bar-fill"></div></div>
+                        </div>
+                    </div>
+                    
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
+                        <div class="stat-label" style="font-size:8px;">AI CONFIDENCE</div>
+                        <div class="stat-value" id="pred-conf-val" style="font-size:10px; color:var(--text-muted);">---</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">ENERGY SAVING (ECO)</div>
+                    <div class="stat-value" id="eco-val">0%</div>
+                    <div class="stat-bar">
+                        <div id="eco-bar" style="width: 0%; background: #10b981;"></div>
+                    </div>
+                </div>
+                <!--<div class="stat-card">
                 <div class="stat-label">PLS TRUST SCORE</div>
                 <div class="stat-value" id="pls-val">100%</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">SEMANTIC PRIORITY</div>
-                <div class="stat-value" id="priority-val">NONE</div>
-            </div>
+            </div> -->
+                <div class="stat-card">
+                    <div class="stat-label">SEMANTIC PRIORITY</div>
+                    <div class="stat-value" id="priority-val">NONE</div>
+                </div>
                 <section class="panel radar-panel">
                     <div class="hud-bracket hud-bracket-nw"></div>
                     <div class="hud-bracket hud-bracket-ne"></div>
@@ -130,7 +170,7 @@
                 </section>
                 <section class="panel tune-panel">
                     <div class="hud-bracket hud-bracket-nw"></div>
-        <div class="hud-bracket hud-bracket-ne"></div>
+                    <div class="hud-bracket hud-bracket-ne"></div>
                     <div class="hud-bracket hud-bracket-sw"></div>
                     <div class="hud-bracket hud-bracket-se"></div>
                     <div class="panel-header">
@@ -146,6 +186,21 @@
                             <label>SDR SQUELCH (POWER THRESHOLD)</label>
                             <input type="range" id="pwr-slider" min="-100" max="0" step="1" value="-60">
                             <span id="pwr-val-display" class="slider-val">-60 dB</span>
+                        </div>
+                        <div class="control-group" style="margin-top: 8px;">
+                            <label>D3QN COLLISION THRESHOLD</label>
+                            <input type="range" id="ai-thresh-slider" min="0" max="1" step="0.05" value="0.8">
+                            <span id="ai-thresh-display" class="slider-val">0.80</span>
+                        </div>
+                        <div class="control-group">
+                            <label>D3QN HISTORY WEIGHT</label>
+                            <input type="range" id="hist-w-slider" min="0" max="1" step="0.05" value="0.8">
+                            <span id="hist-w-display" class="slider-val">0.80</span>
+                        </div>
+                        <div class="control-group">
+                            <label>D3QN UNCERTAINTY WEIGHT</label>
+                            <input type="range" id="uncert-w-slider" min="0" max="1" step="0.05" value="0.2">
+                            <span id="uncert-w-display" class="slider-val">0.20</span>
                         </div>
                     </div>
                 </section>
@@ -197,8 +252,16 @@
                             <span class="value cyan" id="reward-val">10.000</span>
                         </div>
                     </div>
-                    <div class="chart-container ai-chart">
+                    <!-- Chart Tabs -->
+                    <div class="ai-tabs" style="display: flex; gap: 10px; margin-bottom: 10px; padding: 0 16px;">
+                        <button id="tab-loss" class="ai-tab active">Learning Loss</button>
+                        <button id="tab-acc" class="ai-tab">Prediction Accuracy</button>
+                    </div>
+                    <div class="chart-container ai-chart" id="loss-chart-container">
                         <canvas id="loss-canvas"></canvas>
+                    </div>
+                    <div class="chart-container ai-chart" id="acc-chart-container" style="display: none;">
+                        <canvas id="acc-canvas"></canvas>
                     </div>
                 </section>
             </aside>
@@ -212,20 +275,26 @@
         <!-- Terminal Log Drawer -->
         <div id="terminal-drawer" class="terminal-drawer">
             <div class="terminal-header">
-                <span class="terminal-title">AGENT REASONING LOG</span>
-                <span class="terminal-cursor">_</span>
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <span class="terminal-title">AGENT REASONING LOG</span>
+                    <span class="terminal-cursor">_</span>
+                </div>
+                <button id="log-minimize-btn" class="log-minimize-btn" title="Minimize logs">
+                    <span id="log-min-icon">‒</span>
+                </button>
             </div>
             <div id="reasoning-log" class="terminal-content"></div>
         </div>
     </div>
     <div id="expanded-freq-panel" class="expanded-panel">
-        <section class="panel freq-panel" style="padding: 20px;">
-            <div class="panel-header" style="margin-bottom: 12px;">
-                <h2>AVAILABLE FREQUENCY CHANNELS (AI Q-MATRIX)</h2>
+        <section class="panel freq-panel" style="padding: 16px 20px 14px;">
+            <div class="panel-header" style="margin-bottom: 10px;">
+                <h2>AVAILABLE FREQUENCY CHANNELS — AI Q-MATRIX</h2>
+                <span id="fch-active-label"
+                    style="font-size:9px;font-weight:700;font-family:'JetBrains Mono',monospace;color:#22d3ee;letter-spacing:1px;"></span>
             </div>
-            <div style="position: relative; height: 160px; width: 100%; justify-content: end; align-items: end;">
-                <canvas id="freq-matrix-canvas"></canvas>
-            </div>
+            <!-- 10 individual channel cards, built by JS -->
+            <div id="freq-ch-grid" class="fch-grid"></div>
         </section>
     </div>
     <!-- Audio Alerts -->

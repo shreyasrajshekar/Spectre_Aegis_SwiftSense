@@ -1,0 +1,2 @@
+# MySQL driver for Spectre AEGIS telemetry logging
+mysql-connector-python>=8.0
