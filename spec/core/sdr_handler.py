@@ -18,6 +18,7 @@ class SDRHandler:
         self.bandwidth = int(bandwidth)
         self.sdr = None
         self.buffer_size = 1024 * 16
+        self.active_beam = 0 # Current spatial beam index (0-3)
         
         self.simulator = DigitalTwinSimulator(buffer_size=self.buffer_size) if use_digital_twin else None
         
@@ -97,16 +98,23 @@ class SDRHandler:
             t_end = time.perf_counter()
             logging.debug(f"Frequency hop to {frequency/1e6} MHz completed in {(t_end - t_start)*1000:.2f} ms")
 
+    def set_beam_direction(self, beam_idx):
+        """6G Massive MIMO: Sets the spatial beam index (Approximate direction)."""
+        self.active_beam = int(beam_idx) % 4
+        logging.debug(f"Spatial Beam switched to Index {self.active_beam}")
+
     def capture_iq(self):
         """Captures a buffer of I/Q samples."""
         if self.use_digital_twin:
-            return self.simulator.generate_iq()
+            raw_iq = self.simulator.generate_iq()
+            return self.simulator.apply_spatial_filter(raw_iq, self.active_beam)
             
         while True:
             if self.sdr is not None:
                 try:
                     rx_data = self.sdr.rx()
-                    return rx_data
+                    if rx_data is not None:
+                        return rx_data
                 except Exception as e:
                     logging.error(f"SDR read error or disconnect: {e}. Attempting recovery...")
                     self.sdr = None
@@ -114,6 +122,12 @@ class SDRHandler:
             # If sdr is None (either here or on entry), block and re-init
             logging.info("Hardware unavailable. Entering blocking reconnect loop...")
             self._init_hardware()
+
+    def get_sensing_radar(self):
+        """Fetches 6G ISAC radar mapping data."""
+        if self.use_digital_twin:
+            return self.simulator.get_radar_map()
+        return [] # HW radar sensing not yet implemented for standard PlutoSDR
 
     def lbt_check(self, threshold_db=-60):
         """Listen-Before-Talk (LBT) mechanism. Returns True if channel is idle."""

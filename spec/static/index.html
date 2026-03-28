@@ -40,16 +40,19 @@
             <div class="logo">Spectral-Aegis <span>v2.3</span></div>
             <div class="header-right">
                 <div class="frequency-tabs">
-                    <button class="tab active">433M</button>
-                    <button class="tab">2.41G</button>
-                    <button class="tab">2.43G</button>
-                    <button class="tab">2.46G</button>
-                    <button class="tab">5.8G</button>
+                    <button class="tab layer-tab active" data-layer="Legacy">Legacy (Sub-6GHz)</button>
+                    <button class="tab layer-tab" data-layer="cmWave">cmWave (7-24GHz)</button>
+                    <button class="tab layer-tab" data-layer="Sub-THz">Sub-THz (90-300GHz)</button>
+                    <button class="tab layer-tab" data-layer="THz">THz (300GHz+)</button>
                 </div>
                 <div class="status-indicators">
                     <span class="gpu-status">GPU: CPU</span>
                     <span id="mode-toggle" class="mode-tag auto" style="cursor: pointer;">AUTO</span>
                     <span class="mode-tag linked">SDR: LINKED</span>
+                    <div class="mimo-container">
+                        <canvas id="mimo-canvas"></canvas>
+                        <div class="mimo-label">6G SPATIAL BEAMFORMING</div>
+                    </div>
                 </div>
             </div>
         </header>
@@ -94,9 +97,40 @@
             <!-- Right Column -->
             <!-- Side Panel (Left) -->
             <aside class="side-panel">
-                <section class="panel tune-panel">
+            <div class="stat-card">
+                <div class="stat-label">PREDICTION HORIZON</div>
+                <div class="stat-value" id="predict-val">0%</div>
+                <div class="stat-bar"><div id="predict-bar" style="width: 0%"></div></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">ENERGY SAVING (ECO)</div>
+                <div class="stat-value" id="eco-val">0%</div>
+                <div class="stat-bar"><div id="eco-bar" style="width: 0%; background: #10b981;"></div></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">PLS TRUST SCORE</div>
+                <div class="stat-value" id="pls-val">100%</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">SEMANTIC PRIORITY</div>
+                <div class="stat-value" id="priority-val">NONE</div>
+            </div>
+                <section class="panel radar-panel">
                     <div class="hud-bracket hud-bracket-nw"></div>
                     <div class="hud-bracket hud-bracket-ne"></div>
+                    <div class="hud-bracket hud-bracket-sw"></div>
+                    <div class="hud-bracket hud-bracket-se"></div>
+                    <div class="panel-header">
+                        <span class="icon">📡</span> 6G SPATIAL SENSING (ISAC)
+                    </div>
+                    <div class="radar-container">
+                        <canvas id="radar-canvas"></canvas>
+                        <div class="radar-scan-line"></div>
+                    </div>
+                </section>
+                <section class="panel tune-panel">
+                    <div class="hud-bracket hud-bracket-nw"></div>
+        <div class="hud-bracket hud-bracket-ne"></div>
                     <div class="hud-bracket hud-bracket-sw"></div>
                     <div class="hud-bracket hud-bracket-se"></div>
                     <div class="panel-header">

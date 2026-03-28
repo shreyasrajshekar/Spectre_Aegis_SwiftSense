@@ -7,9 +7,14 @@
     --accent-cyan: #22d3ee;
     --accent-yellow: #f59e0b;
     --accent-purple: #c084fc;
+    --accent-purple: #a855f7;
     --accent-pink: #f472b6;
     --accent-teal: #2dd4bf;
-    --bg-dark: #020617;
+    --accent-red: #ef4444; 
+    --accent-amber: #fbbf24;
+    --accent-emerald: #10b981;
+    --accent-gold: #f59e0b;
+    --bg-dark: #0b1120;
     --panel-border: rgba(34, 211, 238, 0.1);
     --terminal-bg: rgba(2, 6, 23, 0.85);
     --hud-glow: 0 0 15px rgba(34, 211, 238, 0.2);
@@ -85,7 +90,62 @@ body::after {
 .header-right {
     display: flex;
     align-items: center;
-    flex: 1;
+    gap: 20px;
+}
+
+.radar-panel {
+    background: rgba(11, 17, 32, 0.8) !important;
+}
+
+.radar-container {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 1;
+    background: radial-gradient(circle, rgba(34, 211, 238, 0.05) 0%, rgba(0, 0, 0, 0.5) 70%);
+    border-radius: 50%;
+    border: 1px solid rgba(34, 211, 238, 0.2);
+    overflow: hidden;
+    margin-top: 10px;
+}
+
+#radar-canvas {
+    width: 100%;
+    height: 100%;
+}
+
+.radar-scan-line {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 50%;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent-cyan));
+    transform-origin: left center;
+    box-shadow: 0 0 15px var(--accent-cyan);
+    pointer-events: none;
+    z-index: 5;
+}
+
+.mimo-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background: rgba(0,0,0,0.5);
+    padding: 5px 15px;
+    border-radius: 10px;
+    border: 1px solid rgba(34, 211, 238, 0.2);
+}
+
+#mimo-canvas {
+    width: 60px;
+    height: 60px;
+}
+
+.mimo-label {
+    font-size: 8px;
+    color: var(--accent-cyan);
+    letter-spacing: 1px;
+    margin-top: 2px;
 }
 
 .frequency-tabs {
@@ -98,22 +158,52 @@ body::after {
 }
 
 .tab {
-    background: transparent;
-    border: none;
-    color: var(--text-muted);
-    padding: 6px 14px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #9ba6b5;
+    padding: 6px 12px;
     border-radius: 6px;
-    font-size: 10px;
-    font-weight: 700;
+    font-size: 11px;
+    font-weight: 600;
     cursor: pointer;
-    transition: all 0.2s;
-    letter-spacing: 0.5px;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    font-family: 'Orbitron', sans-serif;
+    letter-spacing: 1px;
 }
 
-.tab.active {
-    background: var(--accent-cyan);
-    color: #0b1120;
-    box-shadow: 0 0 15px rgba(34, 211, 238, 0.4);
+.tab:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.2);
+    transform: translateY(-1px);
+}
+
+/* Layer Specific Active States */
+.tab.active[data-layer="Legacy"] {
+    background: rgba(16, 185, 129, 0.15);
+    border-color: var(--accent-emerald);
+    color: var(--accent-emerald);
+    box-shadow: 0 0 15px rgba(16, 185, 129, 0.3);
+}
+
+.tab.active[data-layer="cmWave"] {
+    background: rgba(34, 211, 238, 0.15);
+    border-color: var(--accent-cyan);
+    color: var(--accent-cyan);
+    box-shadow: 0 0 15px rgba(34, 211, 238, 0.3);
+}
+
+.tab.active[data-layer="Sub-THz"] {
+    background: rgba(168, 85, 247, 0.15);
+    border-color: var(--accent-purple);
+    color: var(--accent-purple);
+    box-shadow: 0 0 15px rgba(168, 85, 247, 0.3);
+}
+
+.tab.active[data-layer="THz"] {
+    background: rgba(245, 158, 11, 0.15);
+    border-color: var(--accent-gold);
+    color: var(--accent-gold);
+    box-shadow: 0 0 15px rgba(245, 158, 11, 0.3);
 }
 
 .status-indicators {
@@ -461,6 +551,30 @@ body::after {
     color: var(--text-muted);
     letter-spacing: 1px;
 }
+.terminal-stat-value {
+    font-size: 20px;
+    font-weight: 700;
+    font-family: 'Orbitron', sans-serif;
+    color: var(--accent-cyan);
+}
+
+.stat-bar {
+    width: 100%;
+    height: 4px;
+    background: rgba(255,255,255,0.1);
+    margin-top: 5px;
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+#predict-bar {
+    height: 100%;
+    width: 0%;
+    background: var(--accent-cyan);
+    transition: width 0.3s ease, background 0.3s ease;
+    box-shadow: 0 0 10px var(--accent-cyan);
+}
+
 .terminal-cursor {
     color: var(--accent-cyan);
     font-weight: 800;

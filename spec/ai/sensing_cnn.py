@@ -26,7 +26,7 @@ class SpectrumCNN(nn.Module):
         self.fc1 = nn.Linear(64 * 8 * 8, 128)
         self.dropout = nn.Dropout(0.5)
         self.fc2 = nn.Linear(128, num_classes) 
-        # Classes: 0=Idle, 1=5G, 2=IoT, 3=Radar
+        # Classes: 0=Idle, 1=6G-URLLC (Critical), 2=6G-eMBB (High BW), 3=Legacy IoT
 
     def forward(self, x):
         x = self.pool1(F.relu(self.bn1(self.conv1(x))))
@@ -48,7 +48,8 @@ class InferenceEngine:
             
         self.model = SpectrumCNN().to(self.device)
         self.model.eval()
-        self.class_names = ["Idle", "5G", "IoT", "Radar"]
+        self.class_names = ["Idle", "6G-URLLC", "6G-eMBB", "Legacy IoT"]
+        self.priority_map = {0: 0.0, 1: 1.0, 2: 0.5, 3: 0.1}
         self.confidence_threshold = 0.5 # Default AI sensitivity
         
         if model_path:
@@ -76,4 +77,6 @@ class InferenceEngine:
         
         # Sense with dynamic sensitivity threshold
         is_busy = bool(idx != 0 and confidence.item() > self.confidence_threshold)
-        return is_busy, self.class_names[idx], confidence.item()
+        priority = self.priority_map.get(idx, 0.0)
+        
+        return is_busy, self.class_names[idx], confidence.item(), priority
