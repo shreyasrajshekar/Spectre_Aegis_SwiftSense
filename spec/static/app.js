@@ -853,7 +853,7 @@ function logToTerminal(msg, type='normal') {
     line.innerHTML = `<span style="color:var(--text-muted)">[${timestamp}]</span> ${msg}`;
     rLog.appendChild(line);
     rLog.scrollTop = rLog.scrollHeight;
-    if(rLog.childNodes.length > 100) rLog.removeChild(rLog.firstChild);
+    if(rLog.childNodes.length > 500) rLog.removeChild(rLog.firstChild);
 }
 
 // --- WebSocket Connection ---

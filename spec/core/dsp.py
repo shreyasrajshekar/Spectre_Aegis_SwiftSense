@@ -19,15 +19,16 @@ class FastSpectrogramProcessor:
         self.hop_length = hop_length
         self.target_shape = input_size # Default (Channels, Height, Width) -> (1, 64, 64)
 
-    def process_iq(self, iq_data: np.ndarray) -> torch.Tensor:
+    def process_iq(self, iq_data) -> torch.Tensor:
         """
-        Converts 1D complex numpy array of I/Q samples into a 2D magnitude spectrogram tensor
+        Converts array or tensor of I/Q samples into a 2D magnitude spectrogram tensor
         ready for the CNN.
         """
         # 1. Transfer to Tensor and Device
-        # ADALM-Pluto returns complex IQ. 
-        # Convert to float32 on tensor for performance.
-        iq_tensor = torch.from_numpy(iq_data).to(dtype=torch.complex64, device=self.device)
+        if isinstance(iq_data, torch.Tensor):
+            iq_tensor = iq_data.to(dtype=torch.complex64, device=self.device)
+        else:
+            iq_tensor = torch.from_numpy(iq_data).to(dtype=torch.complex64, device=self.device)
         
         # 2. Compute STFT
         # stft expects real inputs for audio, but complex works via proper windowing or we process real/imag separately.

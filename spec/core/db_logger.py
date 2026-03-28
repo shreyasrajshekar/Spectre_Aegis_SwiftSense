@@ -56,6 +56,10 @@ INSERT INTO aegis_logs (
 )
 """
 
+# Pruning is now handled with formatted integers (as LIMIT doesn't support %s parameters in many MySQL versions)
+_PRUNE_OLD_SQL = "DELETE FROM aegis_logs ORDER BY id ASC LIMIT %d"
+_COUNT_SQL     = "SELECT COUNT(*) FROM aegis_logs"
+
 
 class DBLogger:
     """
@@ -118,7 +122,7 @@ class DBLogger:
         radar_targets = len(radar_map) if isinstance(radar_map, list) else 0
 
         row = {
-            "ts":                 datetime.utcnow(),
+            "ts":                 datetime.now(),
             "latency_ms":         telemetry.get("latency_ms"),
             "channel_idx":        telemetry.get("channel_idx"),
             "class_name":         str(telemetry.get("class_name", ""))[:64],
@@ -194,10 +198,23 @@ class DBLogger:
                 try:
                     cursor = self._conn.cursor()
                     cursor.execute(_INSERT_SQL, row)
+                    
+                    # Enforce 500-row limit (Check count and prune oldest if exceeding)
+                    try:
+                        cursor.execute(_COUNT_SQL)
+                        count = cursor.fetchone()[0]
+                        if count > 500:
+                            excess = int(count - 500)
+                            cursor.execute(_PRUNE_OLD_SQL % excess)
+                            log.info(f"DBLogger: Pruned {excess} oldest rows (Total: {count} -> 500)")
+                    except Exception as clean_exc:
+                        log.error(f"DBLogger: Pruning query failed: {clean_exc}")
+                    
+                    self._conn.commit()
                     cursor.close()
                     inserted = True
                 except Exception as exc:
-                    log.warning(f"DBLogger: insert failed ({exc}), reconnecting…")
+                    log.warning(f"DBLogger: Transaction failed ({exc}). Check credentials and table state.")
                     self._conn = None  # force reconnect on next iteration
 
             self._q.task_done()
@@ -224,7 +241,7 @@ def build_logger(
     Factory used by app.py.
     Returns a real DBLogger if all credentials are given, otherwise NullLogger.
     """
-    if all([host, user, password, database]):
+    if all(x is not None for x in [host, user, database]):
         try:
             return DBLogger(host=host, user=user, password=password,
                             database=database, port=port)

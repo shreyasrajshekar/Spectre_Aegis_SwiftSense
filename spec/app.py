@@ -19,9 +19,9 @@ from core.db_logger import build_logger
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 
-# Legacy ISM channels within PlutoSDR hardware range (70 MHz – 6 GHz)
-# 433 MHz, 868 MHz, 915 MHz, 1.2 GHz, 2.4 GHz, 3.5 GHz, 4.9 GHz, 5.2 GHz, 5.5 GHz, 5.8 GHz
-BANDS = [433e6, 868e6, 915e6, 1.2e9, 2.4e9, 3.5e9, 4.9e9, 5.2e9, 5.5e9, 5.8e9]
+# Legacy ISM channels within PlutoSDR hardware range (325 MHz – 3.8 GHz)
+# 433 MHz, 868 MHz, 915 MHz, 1.2 GHz, 1.5 GHz, 1.8 GHz, 2.1 GHz, 2.4 GHz, 3.0 GHz, 3.5 GHz
+BANDS = [433e6, 868e6, 915e6, 1.2e9, 1.5e9, 1.8e9, 2.1e9, 2.4e9, 3.0e9, 3.5e9]
 
 fastapi_app = FastAPI()
 
@@ -53,11 +53,11 @@ global_telemetry = {
     "last_hop_db": "0.00",
     "pls_score": 100,
     "current_layer": "Legacy",
-    "layer_labels": ["433M", "868M", "915M", "1.2G", "2.4G", "3.5G", "4.9G", "5.2G", "5.5G", "5.8G"]
+    "layer_labels": ["433M", "868M", "915M", "1.2G", "1.5G", "1.8G", "2.1G", "2.4G", "3.0G", "3.5G"]
 }
 
 # Legacy ISM band only — all frequencies within ADALM-Pluto hardware range
-LAYER_CONFIG = {"start": 0.433, "step": 0.6, "unit": "GHz"}
+LAYER_CONFIG = {"start": 0.433, "step": 0.3, "unit": "GHz"}
 connected_clients = []
 
 @fastapi_app.websocket("/ws")
@@ -191,27 +191,42 @@ class SpectreAegisController:
         t_start = time.perf_counter()
         
         # Sense
-        iq_data = self.sdr.capture_iq()
-        if iq_data is None:
+        iq_data_raw = self.sdr.capture_iq()
+        t_cap = time.perf_counter()
+        if iq_data_raw is None:
             logging.warning("SDR capture returned None. Skipping cycle.")
             return
-        
+
+        # Ensure single channel numpy array for legacy processing
+        if isinstance(iq_data_raw, (list, tuple)) and len(iq_data_raw) >= 2:
+            iq_data_np = np.asarray(iq_data_raw[0])
+        else:
+            iq_data_np = np.asarray(iq_data_raw)
+
+        # Move to GPU once to avoid redundant transfers
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        iq_data_tensor = torch.from_numpy(iq_data_np).to(device=device, dtype=torch.complex64)
+        t_tensor = time.perf_counter()
+
         # Format Waterfall Slice for UI (downsample for bandwidth)
-        psd_data = np.abs(np.fft.fftshift(np.fft.fft(iq_data[:1024]))) + 1e-12
+        psd_data = np.abs(np.fft.fftshift(np.fft.fft(iq_data_np[:1024]))) + 1e-12
         waterfall_slice = 10 * np.log10(psd_data)
         if hasattr(waterfall_slice, "tolist"):
             global_telemetry["waterfall_slice"] = waterfall_slice.tolist()
         else:
             global_telemetry["waterfall_slice"] = [float(x) for x in waterfall_slice]
+        t_psd = time.perf_counter()
         
-        # DSP
-        spectrogram = self.dsp.process_iq(iq_data)
+        # DSP (uses Tensor directly)
+        spectrogram = self.dsp.process_iq(iq_data_tensor)
+        t_dsp = time.perf_counter()
         
         # AI CNN (Semantic sensing)
         is_busy_ai, class_name, confidence, priority = self.cnn.predict(spectrogram)
+        t_cnn = time.perf_counter()
         
         # Power Squelch Check
-        avg_pwr = 10 * np.log10(np.mean(np.abs(iq_data)**2) + 1e-12)
+        avg_pwr = 10 * np.log10(np.mean(np.abs(iq_data_np)**2) + 1e-12)
         is_busy_pwr = avg_pwr > self.power_threshold
         
         is_busy = bool(is_busy_ai or is_busy_pwr)
@@ -301,8 +316,9 @@ class SpectreAegisController:
             self.last_freq = current_f
         # ────────────────────────────────────────────────────────────────────
             
-        # 6G ISAC: Fetch spatial radar map
-        global_telemetry["radar_map"] = self.sdr.get_sensing_radar()
+        # 6G ISAC: Fetch spatial radar map (Reuse GPU Tensor to save latency)
+        global_telemetry["radar_map"] = self.sdr.get_sensing_radar(iq_data_tensor)
+        t_radar = time.perf_counter()
         
         # 6G PLS: Simulate Physical Layer Security Trust Score
         # Rogue signals (low probability or unknown classes) reduce trust
@@ -319,16 +335,18 @@ class SpectreAegisController:
         global_telemetry["latency_ms"] = float(round(lat, 2))
         global_telemetry["channel_idx"] = int(self.current_channel_idx)
         
-        # Update dynamic frequency labels for HUD
-        layer = global_telemetry["current_layer"]
-        conf = LAYER_CONFIG
-        global_telemetry["layer_labels"] = [f"{(conf['start'] + i*conf['step']):.1f}{conf['unit']}" for i in range(10)]
+        # Update dynamic frequency labels for HUD based on BANDS
+        global_telemetry["layer_labels"] = [f"{b/1e9:.1f}G" if b >= 1e9 else f"{b/1e6:.0f}M" for b in BANDS]
         
         # Publish to Bridge (ORAN RIC)
         self.ric_bridge.publish_metrics(global_telemetry)
 
         # Persist telemetry row to MySQL (non-blocking — queued async)
         self.db.log(global_telemetry)
+
+        t_end_total = time.perf_counter()
+        
+        logging.info(f"[PROFILER] rx:{int((t_cap-t_start)*1000)}ms ten:{int((t_tensor-t_cap)*1000)}ms psd:{int((t_psd-t_tensor)*1000)}ms dsp:{int((t_dsp-t_psd)*1000)}ms cnn:{int((t_cnn-t_dsp)*1000)}ms rad:{int((t_radar-t_cnn)*1000)}ms total:{int((t_end_total-t_start)*1000)}ms")
 
         return lat, reward
 
