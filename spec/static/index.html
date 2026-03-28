@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spectral-Aegis</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <style>
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div id="freeze-overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(26, 31, 46, 0.90); backdrop-filter: blur(8px); z-index: 9999; justify-content: center; align-items: center; flex-direction: column;">
+        <h1 style="color: #ef4444; font-size: 36px; letter-spacing: 4px; margin-bottom: 12px; font-weight: 800; font-family: 'JetBrains Mono', monospace;">SYSTEM FROZEN</h1>
+        <p style="color: #9ba6b5; font-size: 16px; font-weight: 500;">CRITICAL: SDR Hardware Disconnected. Awaiting Reconnection...</p>
+        <div style="margin-top: 30px; width: 40px; height: 40px; border: 4px solid rgba(239, 68, 68, 0.2); border-top: 4px solid #ef4444; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+    </div>
+    <div class="dashboard-container">
+        <!-- Top Nav -->
+        <header class="top-nav">
+            <div class="logo">Spectral-Aegis <span>v2.3</span></div>
+            <div class="header-right">
+                <div class="frequency-tabs">
+                    <button class="tab active">433M</button>
+                    <button class="tab">2.41G</button>
+                    <button class="tab">2.43G</button>
+                    <button class="tab">2.46G</button>
+                    <button class="tab">5.8G</button>
+                </div>
+                <!-- Spacing block -->
+                <div style="flex: 1;"></div> 
+                <div class="status-indicators">
+                    <span class="gpu-status">GPU: CPU</span>
+                    <span class="mode-tag auto">AUTO</span>
+                    <span class="mode-tag linked">SDR: LINKED</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-grid">
+            <!-- Left Panel: Spectrum Intensity -->
+            <section class="panel psd-panel">
+                <div class="panel-header">
+                    <h2>SPECTRUM INTENSITY (PSD)</h2>
+                </div>
+                <!-- Custom container to house y-axis and chart alongside each other similar to the image -->
+                <div class="psd-wrapper">
+                    <div class="y-axis">
+                        <span>20</span>
+                        <span>0</span>
+                        <span>-20</span>
+                        <span>-40</span>
+                        <span>-60</span>
+                        <span>-80</span>
+                        <span>-100</span>
+                    </div>
+                    <div class="chart-container psd-chart">
+                        <canvas id="waterfall-canvas"></canvas>
+                        
+                        <!-- These blue marks in the screenshot look like plot data, simulating them here for the aesthetic -->
+                        <div class="mock-data-mark" style="left: 12%; top: 12%;"></div>
+                        <div class="mock-data-mark" style="left: 31%; top: 14%;"></div>
+                        <div class="mock-data-mark" style="left: 36%; top: 14%;"></div>
+                        <div class="mock-data-mark dot" style="left: 46%; top: 11%;"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right Column -->
+            <div class="right-col">
+                <!-- Health & Latency -->
+                <section class="panel health-panel">
+                    <div class="panel-header">
+                        <h2>HEALTH & LATENCY</h2>
+                    </div>
+                    <div class="metrics-grid">
+                        <div class="metric-card">
+                            <span class="label">Frequency</span>
+                            <span class="value cyan" id="channel-val">0.434 GHz</span>
+                        </div>
+                        <div class="metric-card">
+                            <span class="label">Cycle Time</span>
+                            <span class="value cyan" id="latency-val">2ms</span>
+                        </div>
+                        <div class="metric-card">
+                            <span class="label">Handover Latency</span>
+                            <span class="value yellow" id="handover-val">0.00ms</span>
+                        </div>
+                        <div class="metric-card">
+                            <span class="label">Signal Power</span>
+                            <span class="value purple" id="power-val">32.1 dBm</span>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- AI Engine -->
+                <section class="panel ai-panel">
+                    <div class="panel-header">
+                        <h2>AI ENGINE</h2>
+                    </div>
+                    <div class="ai-metrics">
+                        <div class="metric-card ai-metric">
+                            <span class="label">Learning Steps</span>
+                            <span class="value cyan" id="steps-val">210</span>
+                        </div>
+                        <div class="metric-card ai-metric">
+                            <span class="label">D3QN Loss</span>
+                            <span class="value cyan" id="reward-val">10.000</span>
+                        </div>
+                    </div>
+                    <div class="chart-container ai-chart">
+                        <canvas id="loss-canvas"></canvas>
+                    </div>
+                </section>
+            </div>
+        </main>
+
+        <!-- View More Trigger -->
+        <div style="display: flex; justify-content: center; margin-top: 5px;">
+            <button id="view-more-btn" class="view-more-btn">
+                <span>VIEW FREQUENCY MATRIX</span>
+                <span class="chevron">▼</span>
+            </button>
+        </div>
+
+        <!-- Expanding Frequency Grid Panel -->
+        <div id="expanded-freq-panel" class="expanded-panel">
+            <section class="panel freq-panel" style="padding: 20px;">
+                <div class="panel-header" style="margin-bottom: 12px;">
+                    <h2>AVAILABLE FREQUENCY CHANNELS (AI Q-MATRIX)</h2>
+                </div>
+                <div style="position: relative; height: 160px; width: 100%;">
+                    <canvas id="freq-matrix-canvas"></canvas>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <!-- Hidden Elements for JS backward compatibility -->
+    <div style="display: none;">
+        <div id="lbt-indicator"></div>
+        <div id="signal-id-tag"></div>
+        <div id="ai-overlay"></div>
+        <span id="ai-class"></span>
+        <span id="ai-conf"></span>
+        <input type="checkbox" id="throughput-opt">
+        <canvas id="occupancy-canvas"></canvas>
+        <div id="reasoning-log"></div>
+        <input type="checkbox" id="twin-toggle">
+        <button id="exit-btn"></button>
+        <ul id="breach-list"></ul>
+        <span id="q-val"></span>
+        <div id="active-band-tag"></div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        // Drawing the pink mock D3QN Loss graph exactly like the screenshot
+        document.addEventListener('DOMContentLoaded', () => {
+            const lossCtx = document.getElementById('loss-canvas');
+            if(lossCtx) {
+                window.lossChart = new Chart(lossCtx.getContext('2d'), {
+                    type: 'line',
+                    data: {
+                        labels: ['1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16','17','18','19'],
+                        datasets: [{
+                            data: [10, 10, 10, 10, 48, 45, 10, 45, 10, 40, 10, 52, 45, 45, 10, 45, 45, 10, 10], // approximated from image
+                            borderColor: '#ec4899', 
+                            borderWidth: 2.5,
+                            pointBackgroundColor: '#212836', // panel bg color
+                            pointBorderColor: '#ec4899',
+                            pointRadius: 2.5,
+                            pointHoverRadius: 4,
+                            tension: 0 // straight lines
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            x: { display: false },
+                            y: { display: false, min: 0, max: 60 }
+                        },
+                        plugins: { legend: { display: false }, tooltip: { enabled: false } },
+                        layout: { padding: { left: 10, right: 10, top: 20, bottom: 20 } }
+                    }
+                });
+            }
+        });
+    </script>
+    <script src="app.js"></script>
+</body>
+</html>
