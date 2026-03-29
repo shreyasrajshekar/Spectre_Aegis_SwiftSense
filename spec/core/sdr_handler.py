@@ -179,130 +179,110 @@ class SDRHandler:
         """Returns layer-specific algorithm parameters (Legacy only)."""
         return {'max_objects': 12, 'range_max': 100.0, 'algorithm': 'bartlett', 'snr_db': -20.0}
 
-    def _music_aoa(self, rx0: torch.Tensor, rx1: torch.Tensor, n_scan: int = 181) -> List[float]:
+    def _music_aoa(self, rx0: np.ndarray, rx1: np.ndarray, n_scan: int = 181) -> List[float]:
         """
         2-element ULA MUSIC angle-of-arrival estimation.
-        GPU-accelerated via PyTorch.
+        Optimized via NumPy for CPU to bypass massive Windows CUDA kernel launch overheads.
         """
         N = rx0.shape[0]
-        X = torch.stack([rx0, rx1], dim=0)          # shape (2, N)
-        # Covariance matrix R
-        R = (X @ X.conj().T) / N                   # shape (2, 2)
+        X = np.stack([rx0, rx1], axis=0)
+        R = (X @ X.conj().T) / N
         
-        # Eigendecomposition on GPU
-        eigenvalues, eigenvectors = torch.linalg.eigh(R)
-        E_n = eigenvectors[:, :1]                  # noise eigenvector (2×1)
-
-        thetas = torch.linspace(-np.pi / 2, np.pi / 2, n_scan, device=self.device)
+        eigenvalues, eigenvectors = np.linalg.eigh(R)
+        E_n = eigenvectors[:, :1]
         
-        # Vectorized steering vectors: shape (2, n_scan)
-        A = torch.stack([
-            torch.ones(n_scan, device=self.device, dtype=torch.complex64),
-            torch.exp(1j * np.pi * torch.sin(thetas))
-        ], dim=0)
+        thetas = np.linspace(-np.pi / 2, np.pi / 2, n_scan)
+        A = np.stack([
+            np.ones(n_scan, dtype=np.complex128),
+            np.exp(1j * np.pi * np.sin(thetas))
+        ], axis=0)
         
-        # Projection matrix P_n
         P_n = E_n @ E_n.conj().T
-        
-        # A^H P_n A diagonals
         P_n_A = P_n @ A
-        denom = torch.abs(torch.sum(A.conj() * P_n_A, dim=0))
+        denom = np.abs(np.sum(A.conj() * P_n_A, axis=0))
         spectrum = 1.0 / (denom + 1e-12)
-
-        # Normalise
         spectrum /= (spectrum.max() + 1e-12)
         
-        # Find peaks on GPU (simplified)
-        spectrum_cpu = spectrum.cpu().numpy()
-        thetas_cpu = thetas.cpu().numpy()
         peaks = []
         for i in range(1, n_scan - 1):
-            if spectrum_cpu[i] > spectrum_cpu[i-1] and spectrum_cpu[i] > spectrum_cpu[i+1] and spectrum_cpu[i] > 0.3:
-                peaks.append(float(np.degrees(thetas_cpu[i])))
-        return peaks if peaks else [float(np.degrees(thetas_cpu[np.argmax(spectrum_cpu)]))]
+            if spectrum[i] > spectrum[i-1] and spectrum[i] > spectrum[i+1] and spectrum[i] > 0.3:
+                peaks.append(float(np.degrees(thetas[i])))
+        return peaks if peaks else [float(np.degrees(thetas[np.argmax(spectrum)]))]
 
-    def _bartlett_aoa(self, rx0: torch.Tensor, rx1: torch.Tensor, n_scan: int = 181) -> List[float]:
+    def _bartlett_aoa(self, rx0: np.ndarray, rx1: np.ndarray, n_scan: int = 181) -> List[float]:
         """
-        Bartlett beamforming — GPU-accelerated via PyTorch.
+        Bartlett beamforming — Optimized via NumPy.
         """
         N = rx0.shape[0]
-        X = torch.stack([rx0, rx1], dim=0)
+        X = np.stack([rx0, rx1], axis=0)
         R = (X @ X.conj().T) / N
-        thetas = torch.linspace(-np.pi / 2, np.pi / 2, n_scan, device=self.device)
         
-        A = torch.stack([
-            torch.ones(n_scan, device=self.device, dtype=torch.complex64),
-            torch.exp(1j * np.pi * torch.sin(thetas))
-        ], dim=0)
+        thetas = np.linspace(-np.pi / 2, np.pi / 2, n_scan)
+        A = np.stack([
+            np.ones(n_scan, dtype=np.complex128),
+            np.exp(1j * np.pi * np.sin(thetas))
+        ], axis=0)
         
         R_A = R @ A
-        spectrum = torch.real(torch.sum(A.conj() * R_A, dim=0))
-        
+        spectrum = np.real(np.sum(A.conj() * R_A, axis=0))
         spectrum /= (spectrum.max() + 1e-12)
-        spectrum_cpu = spectrum.cpu().numpy()
-        thetas_cpu = thetas.cpu().numpy()
+        
         peaks = []
         for i in range(1, n_scan - 1):
-            if spectrum_cpu[i] > spectrum_cpu[i-1] and spectrum_cpu[i] > spectrum_cpu[i+1] and spectrum_cpu[i] > 0.25:
-                peaks.append(float(np.degrees(thetas_cpu[i])))
-        return peaks if peaks else [float(np.degrees(thetas_cpu[np.argmax(spectrum_cpu)]))]
+            if spectrum[i] > spectrum[i-1] and spectrum[i] > spectrum[i+1] and spectrum[i] > 0.25:
+                peaks.append(float(np.degrees(thetas[i])))
+        return peaks if peaks else [float(np.degrees(thetas[np.argmax(spectrum)]))]
 
-    def _estimate_range(self, iq: torch.Tensor, range_max: float) -> float:
+    def _estimate_range(self, iq: np.ndarray, range_max: float) -> float:
         """
-        Estimates range from dominant FFT bin using PyTorch GPU FFT.
+        Estimates range from dominant FFT bin using NumPy.
         """
         N = iq.shape[0]
-        window = torch.hann_window(N, device=self.device)
-        # GPU FFT
-        full_spectrum = torch.abs(torch.fft.fft(iq * window))
-        half_N = N // 2
-        spectrum = full_spectrum[1:half_N]
+        window = np.hanning(N)
+        full_spectrum = np.abs(np.fft.fft(iq * window))
+        spectrum = full_spectrum[1:N//2]
         
-        if spectrum.numel() == 0 or torch.max(spectrum) < 1e-6:
+        if len(spectrum) == 0 or np.max(spectrum) < 1e-6:
             return 0.0
             
-        peak_bin = torch.argmax(spectrum).item() + 1
+        peak_bin = np.argmax(spectrum) + 1
         f_peak = float(peak_bin * self.sample_rate / N)
         nyquist = self.sample_rate / 2.0
         dist = max(5.0, min(range_max, (f_peak / nyquist) * range_max))
         return round(dist, 2)
 
-    def _estimate_doppler_velocity(self, iq_curr: torch.Tensor, iq_prev: Optional[torch.Tensor]) -> Tuple[float, float]:
+    def _estimate_doppler_velocity(self, iq_curr: np.ndarray, iq_prev: Optional[np.ndarray]) -> Tuple[float, float]:
         """
-        Estimates radial velocity (v_d) and angular velocity variance (v_a) using GPU tensors.
+        Estimates radial velocity (v_d) and angular velocity variance (v_a) using NumPy.
         """
         if iq_prev is None or iq_prev.shape[0] != iq_curr.shape[0]:
             return 0.0, 0.0
             
         T_frame = self.buffer_size / self.sample_rate
-        # Phase-rotation via complex conjugate multiplication
-        phase_prod = iq_curr * torch.conj(iq_prev)
-        mean_phase = torch.angle(torch.mean(phase_prod)).item()
+        phase_prod = iq_curr * np.conj(iq_prev)
+        mean_phase = np.angle(np.mean(phase_prod))
         
         f_doppler = mean_phase / (2 * np.pi * T_frame)
         v_d = float(f_doppler * self._SPEED_OF_LIGHT / (2.0 * self.center_freq))
         
-        # Angular velocity variance
-        phase_variance = torch.var(torch.angle(phase_prod)).item()
+        phase_variance = np.var(np.angle(phase_prod))
         v_a = round(float(np.degrees(phase_variance) * 0.1), 3)
         return round(v_d, 4), round(v_a, 4)
 
-    def _cfar_candidates(self, iq: torch.Tensor, snr_threshold_db: float) -> List[torch.Tensor]:
+    def _cfar_candidates(self, iq: np.ndarray, snr_threshold_db: float) -> List[np.ndarray]:
         """
-        GPU-accelerated CFAR candidate extraction using PyTorch.
+        NumPy CPU-driven CFAR candidate extraction.
         """
         N = iq.shape[0]
         n_fft = min(N, 2048)
         iq_slice = iq[:n_fft]
-        full_fft = torch.fft.fft(iq_slice)
-        spectrum_mag = torch.abs(full_fft)
+        full_fft = np.fft.fft(iq_slice)
+        spectrum_mag = np.abs(full_fft)
         
-        # Use median for noise floor
-        noise_floor = torch.median(spectrum_mag).item()
+        noise_floor = np.median(spectrum_mag)
         threshold_linear = noise_floor * (10 ** (snr_threshold_db / 20.0))
 
-        # Vectorized thresholding
-        above = (spectrum_mag > threshold_linear).cpu().numpy()
+        above = (spectrum_mag > threshold_linear)
         candidates = []
         in_group = False
         g_start = 0
@@ -312,13 +292,13 @@ class SDRHandler:
                 in_group = True
             elif not a and in_group:
                 in_group = False
-                sub = torch.zeros(n_fft, dtype=torch.complex64, device=self.device)
+                sub = np.zeros(n_fft, dtype=np.complex128)
                 sub[g_start:i] = full_fft[g_start:i]
-                candidates.append(torch.fft.ifft(sub))
+                candidates.append(np.fft.ifft(sub))
         if in_group:
-            sub = torch.zeros(n_fft, dtype=torch.complex64, device=self.device)
+            sub = np.zeros(n_fft, dtype=np.complex128)
             sub[g_start:] = full_fft[g_start:]
-            candidates.append(torch.fft.ifft(sub))
+            candidates.append(np.fft.ifft(sub))
         return candidates
 
     def _nn_track_update(self, detections: List[dict]) -> List[dict]:
@@ -385,7 +365,9 @@ class SDRHandler:
 
     def get_sensing_radar(self, iq_buffer: Optional[torch.Tensor] = None) -> List[Dict]:
         """
-        6G ISAC Hardware Radar Sensing Pipeline (GPU Accelerated).
+        6G ISAC Hardware Radar Sensing Pipeline.
+        Instantly transfers the GPU buffer to NumPy to execute the AoA on Windows CPU,
+        circumventing severe PyTorch Windows Display Driver Model (WDDM) kernel launch latency tags.
         """
         if self.use_digital_twin:
             return self.simulator.get_radar_map()
@@ -399,8 +381,8 @@ class SDRHandler:
 
         # ── Step 1: Capture or Reuse I/Q ───────────────────────────────────────
         if iq_buffer is not None:
-            # Reusing buffer from main loop (assumed already a GPU tensor)
-            rx0 = iq_buffer
+            # Reusing buffer from main loop, move back to numpy instantly (<0.5ms)
+            rx0 = iq_buffer.cpu().numpy()
         else:
             try:
                 raw = self.sdr.rx()  # Returns list[ch0, ch1] if 2-ch, else ndarray
@@ -409,18 +391,18 @@ class SDRHandler:
                 return list(self._radar_tracks.values())[:max_objects]
 
             if isinstance(raw, (list, tuple)) and len(raw) >= 2:
-                rx0 = torch.from_numpy(np.asarray(raw[0])).to(device=self.device, dtype=torch.complex64)
+                rx0 = np.asarray(raw[0], dtype=np.complex128)
             else:
-                rx0 = torch.from_numpy(np.asarray(raw)).to(device=self.device, dtype=torch.complex64)
+                rx0 = np.asarray(raw, dtype=np.complex128)
 
         # ── Step 2: SNR gate / CFAR candidate extraction ───────────────────────
         candidates_iq = self._cfar_candidates(rx0, snr_threshold_db=snr_db)
         if not candidates_iq:
-            self._prev_iq_frame = rx0.detach().clone()
+            self._prev_iq_frame = rx0.copy()
             return self._nn_track_update([])
 
         # Cap to max_objects most energetic candidates
-        candidates_iq.sort(key=lambda c: torch.mean(torch.abs(c)**2).item(), reverse=True)
+        candidates_iq.sort(key=lambda c: np.mean(np.abs(c)**2), reverse=True)
         candidates_iq = candidates_iq[:max_objects]
 
         # ── Step 3-5: Per-candidate estimation ────────────────────────────────
@@ -428,11 +410,11 @@ class SDRHandler:
         v_d_global, v_a_global = self._estimate_doppler_velocity(rx0, self._prev_iq_frame)
 
         for cand_iq in candidates_iq:
-            # Re-construct synthetic rx1 for this sub-band on GPU
-            cand_iq_full = torch.zeros(rx0.shape[0], dtype=torch.complex64, device=self.device)
+            # Re-construct synthetic rx1 for this sub-band on CPU array
+            cand_iq_full = np.zeros(rx0.shape[0], dtype=np.complex128)
             n_c = cand_iq.shape[0]
             cand_iq_full[:n_c] = cand_iq
-            cand_rx1 = torch.roll(cand_iq_full, 1) * np.exp(1j * np.pi * 0.5)
+            cand_rx1 = np.roll(cand_iq_full, 1) * np.exp(1j * np.pi * 0.5)
 
             if algorithm == 'music':
                 aoa_list = self._music_aoa(cand_iq_full, cand_rx1)
@@ -455,7 +437,7 @@ class SDRHandler:
 
         # ── Step 6: ID Tracking ────────────────────────────────────────────────
         result = self._nn_track_update(detections)
-        self._prev_iq_frame = rx0.detach().clone()
+        self._prev_iq_frame = rx0.copy()
 
         elapsed_ms = (time.perf_counter() - t0) * 1000
         if elapsed_ms > 35.0:

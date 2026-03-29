@@ -75,6 +75,11 @@ class RLController:
         
         self.optimizer = optim.Adam(self.q_network.parameters(), lr=lr)
         self.memory = deque(maxlen=10000)
+        self.batch_size = 32
+        
+        self.last_state = None
+        self.last_action = None
+        self.loss = 0.0
         
         self.historical_state = deque(maxlen=self.sequence_length)
         # Pad initial state
@@ -104,6 +109,7 @@ class RLController:
     def select_action(self):
         """Returns (Channel Index, Beam Index) from the 40-dim action space"""
         state_seq = self.get_current_sequence()
+        self.last_state = state_seq.clone()
         
         if random.random() < self.epsilon:
             action_idx = random.randrange(self.action_dim)
@@ -112,10 +118,61 @@ class RLController:
                 q_values, _ = self.q_network(state_seq)
                 action_idx = q_values.argmax(dim=1).item()
                 
+        self.last_action = action_idx
         # Map 40-dim flat index to (Freq, Beam)
         ch_idx = action_idx // 4
         beam_idx = action_idx % 4
         return ch_idx, beam_idx
+
+    def push_transition(self, reward):
+        """Stores the transition into the replay memory."""
+        if self.last_state is not None and self.last_action is not None:
+            next_state = self.get_current_sequence()
+            self.memory.append((
+                self.last_state.cpu().numpy(), 
+                self.last_action, 
+                reward, 
+                next_state.cpu().numpy(), 
+                False
+            ))
+
+    def update(self):
+        """Samples a batch from the replay buffer and trains the D3QN."""
+        if len(self.memory) < self.batch_size:
+            return 0.0
+        
+        batch = random.sample(self.memory, self.batch_size)
+        states = torch.FloatTensor(np.vstack([b[0] for b in batch])).to(self.device)
+        actions = torch.LongTensor([b[1] for b in batch]).to(self.device)
+        rewards = torch.FloatTensor([b[2] for b in batch]).to(self.device)
+        next_states = torch.FloatTensor(np.vstack([b[3] for b in batch])).to(self.device)
+        dones = torch.FloatTensor([b[4] for b in batch]).to(self.device)
+        
+        # Double DQN Logic
+        with torch.no_grad():
+            next_q_online, _ = self.q_network(next_states)
+            best_actions = next_q_online.argmax(dim=1, keepdim=True)
+            next_q_target, _ = self.target_network(next_states)
+            max_next_q = next_q_target.gather(1, best_actions).squeeze(1)
+            target_q = rewards + (1 - dones) * self.gamma * max_next_q
+            
+        curr_q, _ = self.q_network(states)
+        curr_q = curr_q.gather(1, actions.unsqueeze(1)).squeeze(1)
+        
+        loss = nn.MSELoss()(curr_q, target_q)
+        
+        self.optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.q_network.parameters(), 1.0)
+        self.optimizer.step()
+        
+        # Soft update target network
+        tau = 0.005
+        for target_param, q_param in zip(self.target_network.parameters(), self.q_network.parameters()):
+            target_param.data.copy_(tau * q_param.data + (1.0 - tau) * target_param.data)
+            
+        self.loss = loss.item()
+        return self.loss
 
     def get_occupancy_trend(self, n=5):
         """Calculates the trend slope of the last N occupancy states."""

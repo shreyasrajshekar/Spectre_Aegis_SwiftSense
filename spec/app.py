@@ -9,6 +9,7 @@ import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
+from contextlib import asynccontextmanager
 import os
 
 from core.sdr_handler import SDRHandler
@@ -53,7 +54,8 @@ global_telemetry = {
     "last_hop_db": "0.00",
     "pls_score": 100,
     "current_layer": "Legacy",
-    "layer_labels": ["433M", "868M", "915M", "1.2G", "1.5G", "1.8G", "2.1G", "2.4G", "3.0G", "3.5G"]
+    "layer_labels": ["433M", "868M", "915M", "1.2G", "1.5G", "1.8G", "2.1G", "2.4G", "3.0G", "3.5G"],
+    "d3qn_loss": 0.0
 }
 
 # Legacy ISM band only — all frequencies within ADALM-Pluto hardware range
@@ -108,6 +110,25 @@ async def websocket_endpoint(websocket: WebSocket):
                     aegis.rl_agent.history_weight = hist_w
                 if uncert_w is not None:
                     aegis.rl_agent.uncertainty_weight = uncert_w
+            elif cmd_data.get('cmd') == 'set_network_slice':
+                slice_val = cmd_data.get('val', 'none')
+                global_telemetry['network_slice'] = slice_val
+                if slice_val == 'urllc':
+                    aegis.rl_agent.collision_threshold = 0.90
+                    aegis.rl_agent.history_weight = 0.90
+                    aegis.rl_agent.epsilon = 0.1
+                    logging.info("Network Slice: URLLC [Lat/Rel Prioritized]")
+                elif slice_val == 'embb':
+                    aegis.rl_agent.collision_threshold = 0.50
+                    aegis.rl_agent.history_weight = 0.50
+                    aegis.rl_agent.epsilon = 0.4
+                    logging.info("Network Slice: eMBB [Throughput Prioritized]")
+                elif slice_val == 'mmtc':
+                    aegis.rl_agent.collision_threshold = 0.70
+                    aegis.rl_agent.history_weight = 0.80
+                    logging.info("Network Slice: mMTC [Energy Efficiency Prioritized]")
+                else:
+                    logging.info("Network Slice: Default Context")
             elif cmd_data.get('cmd') == 'toggle_manual_mode':
                 aegis.manual_override = cmd_data.get('val', False)
                 global_telemetry["manual_mode"] = aegis.manual_override
@@ -290,6 +311,11 @@ class SpectreAegisController:
             self.sdr.transmit(tx_data)
             reward = self.rl_agent.compute_reward(is_busy=False, action_channel=self.current_channel_idx)
             
+        # ── Reinforcement Learning Training ───────────────────────────────────
+        self.rl_agent.push_transition(reward)
+        loss = self.rl_agent.update()
+        global_telemetry["d3qn_loss"] = round(float(loss), 4)
+
         # ── Energy Saving Calculation (Frequency Transition Delta) ──────────
         current_f = BANDS[self.current_channel_idx]
         if current_f != self.last_freq:
@@ -359,19 +385,27 @@ class SpectreAegisController:
                     logging.error(f"Error in controller cycle: {e}")
                     time.sleep(1.0) # Recovery wait period before next attempt
                 
-            # 6G Green Networking: Adaptive Sleep (Eco-Mode)
-            # If prediction horizon is low (< 0.2 occupancy probability)
-            # we can sleep longer to save energy
+            # 6G Green Networking: Adaptive Sleep (Eco-Mode) + Slice Tying
             pred = float(global_telemetry.get("prediction_horizon", 0.0))
-            if pred < 0.15:
-                sleep_time = 0.2 # 5Hz sensing (Eco MAX)
-                global_telemetry["eco_saving"] = 75
-            elif pred < 0.35:
-                sleep_time = 0.1 # 10Hz sensing (Eco Light)
-                global_telemetry["eco_saving"] = 50
-            else:
-                sleep_time = 0.05 # 20Hz sensing (Active)
+            slice_mode = global_telemetry.get("network_slice", "embb")
+            
+            if slice_mode == 'urllc':
+                sleep_time = 0.01 # 100Hz Sensing (Max Performance)
                 global_telemetry["eco_saving"] = 0
+            elif slice_mode == 'mmtc':
+                sleep_time = 0.4  # Extreme Low Power IoT Mode
+                global_telemetry["eco_saving"] = 90
+            else:
+                # eMBB or Default: Adaptive Sleep
+                if pred < 0.15:
+                    sleep_time = 0.2 # 5Hz sensing (Eco MAX)
+                    global_telemetry["eco_saving"] = 75
+                elif pred < 0.35:
+                    sleep_time = 0.1 # 10Hz sensing (Eco Light)
+                    global_telemetry["eco_saving"] = 50
+                else:
+                    sleep_time = 0.05 # 20Hz sensing (Active)
+                    global_telemetry["eco_saving"] = 0
                 
             time.sleep(sleep_time)
 
@@ -388,11 +422,15 @@ async def get_dashboard():
 # Mount remaining static assets (CSS, JS)
 fastapi_app.mount("/", StaticFiles(directory=_static_dir), name="static")
 
-@fastapi_app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def app_lifespan(app: FastAPI):
     # Start telemetry broadcaster
-    asyncio.create_task(broadcast_telemetry())
-    
+    task = asyncio.create_task(broadcast_telemetry())
+    yield
+    task.cancel()
+
+fastapi_app.router.lifespan_context = app_lifespan
+
 if __name__ == "__main__":
     import torch
 

@@ -132,8 +132,15 @@
                     </div>
 
                     <div class="stat-card">
-                        <div class="stat-label">NETWORK STATS</div>
-                        <div class="stat-value" id="priority-val">NONE</div>
+                        <div class="stat-label">NETWORK SLICE (TRAFFIC PROFILE)</div>
+                        <select id="slice-select" class="slice-select" title="Toggle 6G Traffic Type to alter D3QN AI parameters.">
+                            <option value="none">Default Context</option>
+                            <option value="urllc">URLLC (Critical Reliability / Low Latency)</option>
+                            <option value="embb" selected>eMBB (Massive High Throughput)</option>
+                            <option value="mmtc">mMTC (Massive IoT / Ultra Eco-Mode)</option>
+                        </select>
+                        <div class="stat-label" style="margin-top:12px;">ACTIVE PRIORITY</div>
+                        <div class="stat-value" id="priority-val" style="margin-top: 4px; color: #22d3ee; font-size: 14px;">HIGH BANDWIDTH</div>
                     </div>
                     <section class="panel radar-panel">
                         <div class="hud-bracket hud-bracket-nw"></div>

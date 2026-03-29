@@ -887,7 +887,10 @@ ws.onmessage = (event) => {
         }
     });
 
-    if(rVal) rVal.textContent = data.reward.toFixed(3);
+    if(rVal) {
+        const lossVal = data.d3qn_loss !== undefined ? data.d3qn_loss : 0.0;
+        rVal.textContent = lossVal.toFixed(3);
+    }
     if(pwrVal && data.waterfall_slice.length > 0) {
         const peak = Math.max(...data.waterfall_slice);
         pwrVal.textContent = `${peak.toFixed(1)} dBm`;
@@ -895,7 +898,7 @@ ws.onmessage = (event) => {
     
     // Update AI Engine Graph (Loss/Reward Chart)
     if(lossChart) {
-        const val = (data.reward !== undefined && !isNaN(data.reward)) ? data.reward : 0;
+        const val = (data.d3qn_loss !== undefined && !isNaN(data.d3qn_loss)) ? data.d3qn_loss : 0;
         const chartData = lossChart.data.datasets[0].data;
         chartData.push(val);
         if(chartData.length > 20) chartData.shift();
@@ -1143,6 +1146,34 @@ uncertWSlider?.addEventListener('input', (e) => {
     const val = parseFloat(e.target.value);
     if(uncertWDisp) uncertWDisp.textContent = val.toFixed(2);
     ws.send(JSON.stringify({ cmd: 'update_params', uncert_w: val }));
+});
+
+// Network Slice Selector
+document.getElementById('slice-select')?.addEventListener('change', (e) => {
+    const val = e.target.value;
+    const prioVal = document.getElementById('priority-val');
+    
+    // Immediate visual update to match Sci-Fi aesthetic
+    if (prioVal) {
+        if (val === 'urllc') {
+            prioVal.textContent = 'CRITICAL LATENCY';
+            prioVal.style.color = '#ef4444';
+        } else if (val === 'embb') {
+            prioVal.textContent = 'HIGH BANDWIDTH';
+            prioVal.style.color = '#22d3ee';
+        } else if (val === 'mmtc') {
+            prioVal.textContent = 'ECO SENSOR NODE';
+            prioVal.style.color = '#10b981';
+        } else {
+            prioVal.textContent = 'NONE';
+            prioVal.style.color = '#cbd5e1';
+        }
+    }
+    
+    // Dispatch to Python Engine
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ cmd: 'set_network_slice', val: val }));
+    }
 });
 
 // Tab Switching logic
