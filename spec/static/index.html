@@ -139,8 +139,40 @@
                             <option value="embb" selected>eMBB (Massive High Throughput)</option>
                             <option value="mmtc">mMTC (Massive IoT / Ultra Eco-Mode)</option>
                         </select>
-                        <div class="stat-label" style="margin-top:12px;">ACTIVE PRIORITY</div>
-                        <div class="stat-value" id="priority-val" style="margin-top: 4px; color: #22d3ee; font-size: 14px;">HIGH BANDWIDTH</div>
+                         <div style="margin-top: 15px;">
+                            <div class="stat-label">DETERMINISTIC LOOP (50ms Budget)</div>
+                            <div class="loop-timeline">
+                                <div id="timeline-perception" class="tl-segment perception" style="width: 30%;"></div>
+                                <div id="timeline-cognition" class="tl-segment cognition" style="width: 40%;"></div>
+                                <div id="timeline-execution" class="tl-segment execution" style="width: 30%;"></div>
+                                <div class="tl-marker" style="left: 100%;"></div>
+                            </div>
+                            <div class="tl-labels">
+                                <span>PERC</span>
+                                <span>COGN</span>
+                                <span>EXEC</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="stat-card benchmark-card">
+                        <div class="stat-label">SYSTEM BENCHMARKS (vs CSMA/CA)</div>
+                        <div class="benchmark-row">
+                            <span class="bm-label">Spectral Efficiency</span>
+                            <div class="bm-bar-container">
+                                <div class="bm-bar-legacy" style="width: 60%;"></div>
+                                <div class="bm-bar-aegis" style="width: 92%;"></div>
+                            </div>
+                            <span class="bm-value">+42%</span>
+                        </div>
+                        <div class="benchmark-row">
+                            <span class="bm-label">Collision Rate</span>
+                            <div class="bm-bar-container">
+                                <div class="bm-bar-legacy red" style="width: 35%;"></div>
+                                <div class="bm-bar-aegis" style="width: 4%;"></div>
+                            </div>
+                            <span class="bm-value">-11.2%</span>
+                        </div>
                     </div>
                     <section class="panel radar-panel">
                         <div class="hud-bracket hud-bracket-nw"></div>

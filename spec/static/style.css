@@ -1,23 +1,15 @@
 :root {
-    --bg-color: #0b0f19;
-    --panel-bg: rgba(15, 23, 42, 0.6);
-    --panel-inner: rgba(30, 41, 59, 0.4);
+    --bg-color: #05080f;
+    --panel-bg: rgba(14, 18, 30, 0.75);
+    --panel-inner: rgba(22, 28, 45, 0.5);
     --text-main: #f1f5f9;
-    --text-muted: #64748b;
+    --text-muted: #94a3b8;
     --accent-cyan: #22d3ee;
-    --accent-yellow: #f59e0b;
-    --accent-purple: #c084fc;
-    --accent-purple: #a855f7;
-    --accent-pink: #f472b6;
-    --accent-teal: #2dd4bf;
-    --accent-red: #ef4444; 
-    --accent-amber: #fbbf24;
     --accent-emerald: #10b981;
-    --accent-gold: #f59e0b;
-    --bg-dark: #0b1120;
-    --panel-border: rgba(34, 211, 238, 0.1);
-    --terminal-bg: rgba(2, 6, 23, 0.85);
-    --hud-glow: 0 0 15px rgba(34, 211, 238, 0.2);
+    --accent-red: #ef4444; 
+    --glass-border: rgba(34, 211, 238, 0.15);
+    --panel-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.8);
+    --hud-glow: 0 0 20px rgba(34, 211, 238, 0.25);
 }
 
 * {
@@ -251,11 +243,14 @@ body::after {
 
 .panel {
     background: var(--panel-bg);
+    backdrop-filter: blur(12px) saturate(180%);
+    -webkit-backdrop-filter: blur(12px) saturate(180%);
+    border: 1px solid var(--glass-border);
     border-radius: 12px;
     padding: 24px;
     display: flex;
     flex-direction: column;
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+    box-shadow: var(--panel-shadow);
 }
 
 .panel-header {
@@ -796,8 +791,92 @@ body::after {
 }
 
 /* ─── Grid container ──────────────────────────────────────────────────────── */
+/* ─── ISAC Framework Components ───────────────────────────────────────── */
+.fusion-badge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(16, 185, 129, 0.1);
+    border: 1px solid rgba(16, 185, 129, 0.2);
+    padding: 4px 10px;
+    border-radius: 6px;
+    margin-right: 12px;
+}
+.fusion-label {
+    color: var(--accent-emerald);
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 1px;
+}
+.fusion-pulse {
+    width: 6px;
+    height: 6px;
+    background: var(--accent-emerald);
+    border-radius: 50%;
+    box-shadow: 0 0 10px var(--accent-emerald);
+    animation: pulseGlow 2s infinite;
+}
+@keyframes pulseGlow { 0% { opacity: 0.4; } 50% { opacity: 1; } 100% { opacity: 0.4; } }
+
+/* Loop Timeline */
+.loop-timeline {
+    width: 100%;
+    height: 10px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 5px;
+    display: flex;
+    overflow: hidden;
+    margin: 8px 0;
+    position: relative;
+    border: 1px solid rgba(255,255,255,0.1);
+}
+.tl-segment { transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
+.tl-segment.perception { background: var(--accent-cyan); box-shadow: 0 0 10px var(--accent-cyan); }
+.tl-segment.cognition { background: var(--accent-teal); opacity: 0.8; }
+.tl-segment.execution { background: var(--accent-pink); }
+.tl-marker {
+    position: absolute;
+    top: 0; height: 100%; width: 2px;
+    background: #fff;
+    box-shadow: 0 0 5px #fff;
+    z-index: 5;
+}
+.tl-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 8px;
+    font-weight: 700;
+    color: var(--text-muted);
+}
+
+/* Benchmarking */
+.benchmark-card { gap: 14px; }
+.benchmark-row { display: flex; align-items: center; gap: 10px; }
+.bm-label { flex: 1; font-size: 9px; font-weight: 700; color: var(--text-muted); }
+.bm-bar-container {
+    flex: 2;
+    height: 14px;
+    background: rgba(0,0,0,0.4);
+    border-radius: 7px;
+    position: relative;
+    overflow: hidden;
+}
+.bm-bar-legacy {
+    height: 50%;
+    position: absolute;
+    top: 50%;
+    left: 0;
+    background: rgba(255,255,255,0.2);
+    border-radius: 0 7px 7px 0;
+}
+.bm-bar-legacy.red { background: rgba(239, 68, 68, 0.3); }
+.bm-bar-aegis {
+    height: 100%;
+    background: linear-gradient(90deg, transparent, var(--accent-cyan));
+    box-shadow: 0 0 8px var(--accent-cyan);
+    border-radius: 0 7px 7px 0;
+}
 .frequency-grid-container {
-    flex: 1;
     display: grid;
     grid-template-columns: repeat(5, 1fr);
     grid-template-rows: repeat(2, 1fr);

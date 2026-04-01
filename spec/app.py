@@ -224,6 +224,9 @@ class SpectreAegisController:
     def execute_cycle(self):
         t_start = time.perf_counter()
         
+        # ── Phase 1: Perception (0ms - ~15ms) ────────────────────────────────
+        t_perception_start = t_start
+        
         # Sense
         iq_data_raw = self.sdr.capture_iq()
         t_cap = time.perf_counter()
@@ -264,6 +267,13 @@ class SpectreAegisController:
         
         is_busy = bool(is_busy_ai or is_busy_pwr)
         
+        # 6G ISAC: Fetch spatial radar map (Reuse GPU Tensor to save latency)
+        global_telemetry["radar_map"] = self.sdr.get_sensing_radar(iq_data_tensor)
+        t_perception_end = time.perf_counter()
+        
+        # ── Phase 2: Cognition (~15ms - ~35ms) ───────────────────────────────
+        t_cognition_start = t_perception_end
+        
         # History: Push (Occupancy, Power, Priority)
         self.rl_agent.push_state(is_busy, avg_pwr, priority)
         
@@ -278,22 +288,28 @@ class SpectreAegisController:
         
         # Proactive Vacation Logic: If predicted occupancy > dynamic collision_threshold, trigger early hop
         is_collision_predicted = prediction > self.rl_agent.collision_threshold
-        
         global_telemetry["event_trigger"] = "predictive_vacate" if is_collision_predicted else None
-        
+
         # Extract Q-Values for analytical dash
-        with torch.no_grad() if 'torch' in globals() else np.errstate():
+        with torch.no_grad():
             seq = self.rl_agent.get_current_sequence()
             q_vals, _ = self.rl_agent.q_network(seq)
             global_telemetry["q_values"] = q_vals[0].cpu().numpy().tolist()
 
-        if is_busy or is_collision_predicted:
-            if is_busy: global_telemetry["event_trigger"] = "collision"
-            
-            if not self.manual_override:
-                action_ch, action_beam = self.rl_agent.select_action()
+        # RL Selection (Predictive or Reactive)
+        action_ch, action_beam = self.rl_agent.select_action()
+        t_cognition_end = time.perf_counter()
+
+        # ── Phase 3: Execution (~35ms - 50ms) ────────────────────────────────
+        t_execution_start = t_cognition_end
+        
+        # Decide Action based on Sense vs Decision
+        if not self.manual_override:
+            # Automatic Mode
+            if is_busy or is_collision_predicted:
+                if is_busy: global_telemetry["event_trigger"] = "collision"
                 
-                # Act
+                # Act: Retune + Beamform
                 self.sdr.set_frequency(BANDS[action_ch])
                 self.sdr.set_beam_direction(action_beam)
                 
@@ -302,19 +318,24 @@ class SpectreAegisController:
                 
                 reason = "VACATE" if is_collision_predicted else "REACTIVE"
                 global_telemetry["reasoning_msg"] = f"{reason}: PU '{class_name}' @ CH{self.current_channel_idx} -> Hop CH{action_ch} BEAM{action_beam}"
+                reward = self.rl_agent.compute_reward(is_busy=is_busy, action_channel=self.current_channel_idx)
             else:
-                global_telemetry["reasoning_msg"] = f"Manual Override active. PU detected but hold frequency."
-            reward = self.rl_agent.compute_reward(is_busy=is_busy, action_channel=self.current_channel_idx)
-        else:
-            if not self.manual_override:
+                # Idle: Transmit Data Burst
                 global_telemetry["reasoning_msg"] = f"Sensing... CH{self.current_channel_idx} IDLE"
+                tx_data = np.zeros(1024, dtype=complex)
+                self.sdr.transmit(tx_data)
+                reward = self.rl_agent.compute_reward(is_busy=False, action_channel=self.current_channel_idx)
+        else:
+            # Manual Mode
+            if is_busy:
+                global_telemetry["reasoning_msg"] = f"Manual Override active. PU detected but hold frequency."
             else:
                 global_telemetry["reasoning_msg"] = f"Manual Lock on CH{self.current_channel_idx}"
+            reward = self.rl_agent.compute_reward(is_busy=is_busy, action_channel=self.current_channel_idx)
             
-            tx_data = np.zeros(1024, dtype=complex)
-            self.sdr.transmit(tx_data)
-            reward = self.rl_agent.compute_reward(is_busy=False, action_channel=self.current_channel_idx)
-            
+        t_execution_end = time.perf_counter()
+        t_end_total = t_execution_end
+        
         # ── Final Telemetry Refresh (Reflect Action Taken) ───────────────────
         global_telemetry["is_busy"] = is_busy
         global_telemetry["manual_mode"] = self.manual_override
@@ -356,9 +377,8 @@ class SpectreAegisController:
             self.last_freq = current_f
         # ────────────────────────────────────────────────────────────────────
             
-        # 6G ISAC: Fetch spatial radar map (Reuse GPU Tensor to save latency)
-        global_telemetry["radar_map"] = self.sdr.get_sensing_radar(iq_data_tensor)
-        t_radar = time.perf_counter()
+        # 6G ISAC: Radar and Doppler processed in Perception Phase
+        t_radar = t_perception_end
         
         # 6G PLS: Simulate Physical Layer Security Trust Score
         # Rogue signals (low probability or unknown classes) reduce trust
@@ -373,6 +393,11 @@ class SpectreAegisController:
         
         global_telemetry["reward"] = round(float(reward), 3)
         global_telemetry["latency_ms"] = float(round(lat, 2))
+        
+        # Phase Timings (ms) for Loop Timeline UI
+        global_telemetry["phase_perception"] = (t_perception_end - t_perception_start) * 1000
+        global_telemetry["phase_cognition"] = (t_cognition_end - t_cognition_start) * 1000
+        global_telemetry["phase_execution"] = (t_execution_end - t_execution_start) * 1000
         
         # Update dynamic frequency labels for HUD based on BANDS
         global_telemetry["layer_labels"] = [f"{b/1e9:.1f}G" if b >= 1e9 else f"{b/1e6:.0f}M" for b in BANDS]
