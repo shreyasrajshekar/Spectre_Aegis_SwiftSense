@@ -45,16 +45,17 @@ class SDRHandler:
             self._init_hardware()
             
     def _init_hardware(self):
-        """Attempts to initialize the ADALM-Pluto hardware, auto-finding USB or IP URIs."""
+        """Attempts to initialize the ADALM-Pluto hardware, auto-finding USB or IP URIs. Falls back to Mock Mode if not found."""
         if adi is None:
-            logging.error("ADI library missing. Cannot connect to SDR.")
-            raise ImportError("pyadi-iio is required, but not found.")
+            logging.error("ADI library missing. Cannot connect to SDR. Defaulting to Mock Mode.")
+            self.use_digital_twin = True
+            self.simulator = DigitalTwinSimulator(buffer_size=self.buffer_size)
+            return
             
         import iio
-
-        while self.sdr is None:
-            # 1. Scan dynamically for the connected PlutoSDR (e.g., usb:1.6.5)
-            logging.info("Scanning for PlutoSDR devices...")
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            logging.info(f"Scanning for PlutoSDR devices (Attempt {attempt}/{max_attempts})...")
             contexts = iio.scan_contexts()
             pluto_uri = None
             for uri, desc in contexts.items():
@@ -63,26 +64,33 @@ class SDRHandler:
                     break
                     
             if not pluto_uri:
-                logging.error("No PlutoSDR found via discovery. Defaulting to IP 192.168.2.1...")
+                logging.warning(f"No PlutoSDR found via discovery on attempt {attempt}. Defaulting to IP 192.168.2.1...")
                 pluto_uri = "ip:192.168.2.1"
                 
             try:
                 logging.info(f"Attempting to connect to PlutoSDR at {pluto_uri}...")
                 self.sdr = adi.Pluto(pluto_uri)
+                if self.sdr:
+                    break
             except Exception as e:
                 logging.warning(f"Connection to {pluto_uri} failed: {e}")
                 if pluto_uri.startswith("usb:"):
                     logging.info("Trying secondary IP fallback (192.168.2.1) just in case...")
                     try:
                         self.sdr = adi.Pluto("ip:192.168.2.1")
+                        if self.sdr:
+                            break
                     except Exception:
                         pass
                 
-                if self.sdr is None:
-                    logging.error("Hardware not found. Pausing AI inference and polling every 5 seconds...")
-                    import time
+                if attempt < max_attempts:
+                    logging.info(f"Hardware not found. Retrying in 5 seconds...")
                     time.sleep(5)
-                    continue # Retry from the top of the while loop
+                else:
+                    logging.error("Hardware not found after all attempts. Falling back to Mock Mode (Digital Twin).")
+                    self.use_digital_twin = True
+                    self.simulator = DigitalTwinSimulator(buffer_size=self.buffer_size)
+                    return # Exit init_hardware with mock mode active
                 
         # Configure SDR Hardware once connected
         try:
@@ -384,10 +392,14 @@ class SDRHandler:
             # Reusing buffer from main loop, move back to numpy instantly (<0.5ms)
             rx0 = iq_buffer.cpu().numpy()
         else:
-            try:
-                raw = self.sdr.rx()  # Returns list[ch0, ch1] if 2-ch, else ndarray
-            except Exception as e:
-                logging.warning(f"[Radar] rx() failed: {e}")
+            if self.sdr is not None:
+                try:
+                    raw = self.sdr.rx()  # Returns list[ch0, ch1] if 2-ch, else ndarray
+                except Exception as e:
+                    logging.warning(f"[Radar] rx() failed: {e}")
+                    return list(self._radar_tracks.values())[:max_objects]
+            else:
+                logging.debug("[Radar] SDR hardware not connected. Returning tracks from last scan.")
                 return list(self._radar_tracks.values())[:max_objects]
 
             if isinstance(raw, (list, tuple)) and len(raw) >= 2:

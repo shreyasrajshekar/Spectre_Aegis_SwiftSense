@@ -6,6 +6,7 @@ import threading
 import asyncio
 import json
 import uvicorn
+import torch
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
@@ -61,6 +62,7 @@ global_telemetry = {
 # Legacy ISM band only — all frequencies within ADALM-Pluto hardware range
 LAYER_CONFIG = {"start": 0.433, "step": 0.3, "unit": "GHz"}
 connected_clients = []
+aegis = None
 
 @fastapi_app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -77,66 +79,72 @@ async def websocket_endpoint(websocket: WebSocket):
             elif cmd_data.get('cmd') == 'switch_layer':
                 pass  # Only Legacy band supported — layer switching disabled
             elif cmd_data.get('cmd') == 'toggle_mode':
-                aegis.sdr.use_digital_twin = cmd_data.get('val', False)
-                if aegis.sdr.use_digital_twin:
-                    if not aegis.sdr.simulator:
-                        from core.digital_twin import DigitalTwinSimulator
-                        aegis.sdr.simulator = DigitalTwinSimulator(aegis.sdr.buffer_size)
+                if aegis:
+                    aegis.sdr.use_digital_twin = cmd_data.get('val', False)
+                    if aegis.sdr.use_digital_twin:
+                        if not aegis.sdr.simulator:
+                            from core.digital_twin import DigitalTwinSimulator
+                            aegis.sdr.simulator = DigitalTwinSimulator(aegis.sdr.buffer_size)
             elif cmd_data.get('cmd') == 'toggle_optimizer':
                 is_max_throughput = cmd_data.get('val', False)
-                if is_max_throughput:
+                if is_max_throughput and aegis:
                     aegis.rl_agent.epsilon = 0.5 
             elif cmd_data.get('cmd') == 'set_channel':
                 ch_idx = cmd_data.get('idx', 0)
-                aegis.manual_override = True
-                aegis.current_channel_idx = ch_idx
-                aegis.sdr.set_frequency(BANDS[ch_idx])
-                logging.info(f"Manual Override: Forced channel {ch_idx}")
+                if aegis:
+                    aegis.manual_override = True
+                    aegis.current_channel_idx = ch_idx
+                    aegis.sdr.set_frequency(BANDS[ch_idx])
+                    logging.info(f"Manual Override: Forced channel {ch_idx}")
             elif cmd_data.get('cmd') == 'update_params':
                 conf = cmd_data.get('conf')
                 pwr = cmd_data.get('pwr')
                 ai_thresh = cmd_data.get('ai_thresh')
                 hist_w = cmd_data.get('hist_w')
                 uncert_w = cmd_data.get('uncert_w')
-                if conf is not None:
-                    aegis.cnn.confidence_threshold = conf
-                    global_telemetry["conf_threshold"] = conf
-                if pwr is not None:
-                    aegis.power_threshold = pwr
-                    global_telemetry["pwr_threshold"] = pwr
-                if ai_thresh is not None:
-                    aegis.rl_agent.collision_threshold = ai_thresh
-                if hist_w is not None:
-                    aegis.rl_agent.history_weight = hist_w
-                if uncert_w is not None:
-                    aegis.rl_agent.uncertainty_weight = uncert_w
+                if aegis:
+                    if conf is not None:
+                        aegis.cnn.confidence_threshold = conf
+                        global_telemetry["conf_threshold"] = conf
+                    if pwr is not None:
+                        aegis.power_threshold = pwr
+                        global_telemetry["pwr_threshold"] = pwr
+                    if ai_thresh is not None:
+                        aegis.rl_agent.collision_threshold = ai_thresh
+                    if hist_w is not None:
+                        aegis.rl_agent.history_weight = hist_w
+                    if uncert_w is not None:
+                        aegis.rl_agent.uncertainty_weight = uncert_w
             elif cmd_data.get('cmd') == 'set_network_slice':
                 slice_val = cmd_data.get('val', 'none')
                 global_telemetry['network_slice'] = slice_val
-                if slice_val == 'urllc':
-                    aegis.rl_agent.collision_threshold = 0.90
-                    aegis.rl_agent.history_weight = 0.90
-                    aegis.rl_agent.epsilon = 0.1
-                    logging.info("Network Slice: URLLC [Lat/Rel Prioritized]")
-                elif slice_val == 'embb':
-                    aegis.rl_agent.collision_threshold = 0.50
-                    aegis.rl_agent.history_weight = 0.50
-                    aegis.rl_agent.epsilon = 0.4
-                    logging.info("Network Slice: eMBB [Throughput Prioritized]")
-                elif slice_val == 'mmtc':
-                    aegis.rl_agent.collision_threshold = 0.70
-                    aegis.rl_agent.history_weight = 0.80
-                    logging.info("Network Slice: mMTC [Energy Efficiency Prioritized]")
-                else:
-                    logging.info("Network Slice: Default Context")
+                if aegis:
+                    if slice_val == 'urllc':
+                        aegis.rl_agent.collision_threshold = 0.90
+                        aegis.rl_agent.history_weight = 0.90
+                        aegis.rl_agent.epsilon = 0.1
+                        logging.info("Network Slice: URLLC [Lat/Rel Prioritized]")
+                    elif slice_val == 'embb':
+                        aegis.rl_agent.collision_threshold = 0.50
+                        aegis.rl_agent.history_weight = 0.50
+                        aegis.rl_agent.epsilon = 0.4
+                        logging.info("Network Slice: eMBB [Throughput Prioritized]")
+                    elif slice_val == 'mmtc':
+                        aegis.rl_agent.collision_threshold = 0.70
+                        aegis.rl_agent.history_weight = 0.80
+                        logging.info("Network Slice: mMTC [Energy Efficiency Prioritized]")
+                    else:
+                        logging.info("Network Slice: Default Context")
             elif cmd_data.get('cmd') == 'toggle_manual_mode':
-                aegis.manual_override = cmd_data.get('val', False)
-                global_telemetry["manual_mode"] = aegis.manual_override
-                logging.info(f"Control Mode Switched: {'MANUAL' if aegis.manual_override else 'AUTO'}")
+                if aegis:
+                    aegis.manual_override = cmd_data.get('val', False)
+                    global_telemetry["manual_mode"] = aegis.manual_override
+                    logging.info(f"Control Mode Switched: {'MANUAL' if aegis.manual_override else 'AUTO'}")
             elif cmd_data.get('cmd') == 'toggle_pause':
-                aegis.is_paused = cmd_data.get('val', False)
-                global_telemetry["is_paused"] = aegis.is_paused
-                logging.info(f"Scan Loop {'PAUSED' if aegis.is_paused else 'RESUMED'}")
+                if aegis:
+                    aegis.is_paused = cmd_data.get('val', False)
+                    global_telemetry["is_paused"] = aegis.is_paused
+                    logging.info(f"Scan Loop {'PAUSED' if aegis.is_paused else 'RESUMED'}")
     except WebSocketDisconnect:
         if websocket in connected_clients:
             connected_clients.remove(websocket)
@@ -190,6 +198,10 @@ class SpectreAegisController:
                  db_pass=None, db_name=None, db_port=3306):
         logging.info("Initializing Spectre AEGIS Controller...")
         self.sdr = SDRHandler(use_digital_twin=use_digital_twin, center_freq=BANDS[0])
+        if self.sdr.use_digital_twin:
+            logging.info("Spectre AEGIS operational in MOCK MODE (Simulated Hardware)")
+        else:
+            logging.info("Spectre AEGIS operational in HARDWARE MODE (PlutoSDR)")
         self.dsp = FastSpectrogramProcessor()
         self.cnn = InferenceEngine()
         self.rl_agent = RLController(action_dim=40) # 10 Freqs * 4 Beams
@@ -207,6 +219,7 @@ class SpectreAegisController:
         )
         self.last_freq = BANDS[0]
         self.total_energy_score = 50.0 # Start at 50% efficiency baseline
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
     def execute_cycle(self):
         t_start = time.perf_counter()
@@ -225,8 +238,7 @@ class SpectreAegisController:
             iq_data_np = np.asarray(iq_data_raw)
 
         # Move to GPU once to avoid redundant transfers
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        iq_data_tensor = torch.from_numpy(iq_data_np).to(device=device, dtype=torch.complex64)
+        iq_data_tensor = torch.from_numpy(iq_data_np).to(device=self.device, dtype=torch.complex64)
         t_tensor = time.perf_counter()
 
         # Format Waterfall Slice for UI (downsample for bandwidth)
@@ -252,14 +264,6 @@ class SpectreAegisController:
         
         is_busy = bool(is_busy_ai or is_busy_pwr)
         
-        # Update Telemetry & History
-        global_telemetry["is_busy"] = is_busy
-        global_telemetry["manual_mode"] = self.manual_override
-        global_telemetry["class_name"] = str(class_name) if is_busy else "Idle"
-        global_telemetry["confidence"] = round(float(confidence), 3)
-        global_telemetry["priority"] = priority
-        global_telemetry["active_beam"] = self.current_beam_idx
-
         # History: Push (Occupancy, Power, Priority)
         self.rl_agent.push_state(is_busy, avg_pwr, priority)
         
@@ -311,6 +315,16 @@ class SpectreAegisController:
             self.sdr.transmit(tx_data)
             reward = self.rl_agent.compute_reward(is_busy=False, action_channel=self.current_channel_idx)
             
+        # ── Final Telemetry Refresh (Reflect Action Taken) ───────────────────
+        global_telemetry["is_busy"] = is_busy
+        global_telemetry["manual_mode"] = self.manual_override
+        global_telemetry["class_name"] = str(class_name) if is_busy else "Idle"
+        global_telemetry["confidence"] = round(float(confidence), 3)
+        global_telemetry["priority"] = priority
+        global_telemetry["active_beam"] = self.current_beam_idx
+        global_telemetry["channel_idx"] = int(self.current_channel_idx)
+        # ────────────────────────────────────────────────────────────────────
+            
         # ── Reinforcement Learning Training ───────────────────────────────────
         self.rl_agent.push_transition(reward)
         loss = self.rl_agent.update()
@@ -359,7 +373,6 @@ class SpectreAegisController:
         
         global_telemetry["reward"] = round(float(reward), 3)
         global_telemetry["latency_ms"] = float(round(lat, 2))
-        global_telemetry["channel_idx"] = int(self.current_channel_idx)
         
         # Update dynamic frequency labels for HUD based on BANDS
         global_telemetry["layer_labels"] = [f"{b/1e9:.1f}G" if b >= 1e9 else f"{b/1e6:.0f}M" for b in BANDS]
@@ -432,7 +445,6 @@ async def app_lifespan(app: FastAPI):
 fastapi_app.router.lifespan_context = app_lifespan
 
 if __name__ == "__main__":
-    import torch
 
     # Load .env file if present (DB credentials live there, not in source)
     _env_path = os.path.join(os.path.dirname(__file__), '.env')

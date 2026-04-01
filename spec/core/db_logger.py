@@ -152,10 +152,15 @@ class DBLogger:
 
     def shutdown(self) -> None:
         """Flush remaining rows and close the connection gracefully."""
+        if not self._enabled:
+            return
         log.info("DBLogger: flushing queue before shutdown…")
         self._enabled = False
-        # Give the worker a moment to drain
-        self._q.join()
+        # Push sentinel to stop worker
+        self._q.put(None)
+        # Wait for worker thread to exit
+        self._worker.join(timeout=2.0)
+        
         if self._conn and self._conn.is_connected():
             self._conn.close()
         log.info("DBLogger: closed.")
@@ -183,18 +188,27 @@ class DBLogger:
     def _drain_loop(self) -> None:
         """Background thread: dequeue rows and INSERT them."""
         RETRY_DELAY = 5  # seconds between reconnect attempts
+        MAX_RETRIES = 5  # Don't stay stuck forever if DB is broken
 
         while True:
             row = self._q.get()  # blocks until a row is available
+            if row is None:
+                self._q.task_done()
+                break # Shutdown signal
+            
             inserted = False
-
+            retry_count = 0
             while not inserted:
                 if self._conn is None or not self._conn.is_connected():
-                    log.warning("DBLogger: reconnecting…")
+                    log.warning(f"DBLogger: reconnecting (Attempt {retry_count+1}/{MAX_RETRIES})…")
                     if not self._connect():
+                        retry_count += 1
+                        if retry_count >= MAX_RETRIES:
+                            log.error("DBLogger: Maximum reconnect attempts reached. Dropping row.")
+                            break
                         time.sleep(RETRY_DELAY)
                         continue  # keep retrying
-
+                
                 try:
                     cursor = self._conn.cursor()
                     cursor.execute(_INSERT_SQL, row)

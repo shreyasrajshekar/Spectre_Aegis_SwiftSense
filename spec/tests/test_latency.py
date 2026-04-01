@@ -7,7 +7,7 @@ def test_simulation_latency():
     Constraint: Must execute cycle in < 50ms.
     Handover: < 10ms.
     """
-    controller = SpectreAegisController(use_simulation=True)
+    controller = SpectreAegisController(use_digital_twin=True)
     
     cycle_latencies = []
     
